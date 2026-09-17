@@ -1,18 +1,36 @@
 #include <Arduino.h>
+#include <Adafruit_NeoPixel.h>
 
-// put function declarations here:
-int myFunction(int, int);
+// Onboard Neopixel bring-up test: cycles red/green/blue.
+// Confirms GPIO48 drives the onboard RGB LED before adding more
+// components. Not the final firmware -- see Phase 5.
+
+#define LED_PIN 48
+#define LED_COUNT 1
+
+Adafruit_NeoPixel pixel(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 
 void setup() {
-  // put your setup code here, to run once:
-  int result = myFunction(2, 3);
+  Serial.begin(115200);
+  delay(1000);
+  pixel.begin();
+  pixel.setBrightness(50);
+  Serial.println("Neopixel test starting...");
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
-}
+  Serial.println("RED");
+  pixel.setPixelColor(0, pixel.Color(255, 0, 0));
+  pixel.show();
+  delay(1000);
 
-// put function definitions here:
-int myFunction(int x, int y) {
-  return x + y;
+  Serial.println("GREEN");
+  pixel.setPixelColor(0, pixel.Color(0, 255, 0));
+  pixel.show();
+  delay(1000);
+
+  Serial.println("BLUE");
+  pixel.setPixelColor(0, pixel.Color(0, 0, 255));
+  pixel.show();
+  delay(1000);
 }

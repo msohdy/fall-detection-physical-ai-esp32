@@ -50,30 +50,33 @@ Each task below is a checkbox. As you close a task, capture what you'd tell some
 
 **Free/open-source tools to design and document the diagram**
 
-- [ ] [Fritzing](https://fritzing.org/) — open source, breadboard-style diagrams that read well for a general open-source audience; has an ESP32 devkit part in the community library (search Fritzing Parts if it's not bundled)
-- [ ] [Wokwi](https://wokwi.com/) — free browser-based simulator with real ESP32-S3 + MPU6050 support; lets you wire and even test firmware logic virtually before touching hardware, and exports a shareable diagram/project link
-- [ ] [KiCad](https://www.kicad.org/) — open source, overkill for a breadboard wiring diagram but worth it if you want a proper schematic symbol or plan to make a PCB later
-- [ ] Pick one primary tool for the repo (Fritzing or Wokwi cover this project well) and note the choice in `/docs`
+- [x] [Fritzing](https://fritzing.org/) — **chosen primary tool** (switched from an initial Wokwi choice): open source, breadboard-style diagram, parts easy to find in Fritzing's library
+- [x] [Wokwi](https://wokwi.com/) — considered first, not used
+- [x] [KiCad](https://www.kicad.org/) — not needed for this project (no PCB planned for v1)
+- [x] Pick one primary tool for the repo — **Fritzing** (deviation from the earlier Wokwi decision, made once actually building the diagram)
 
-**Pin table** (fill in against your specific ESP32-S3 board's silkscreen — pin numbers vary by dev board)
+**Pin table** — **deviation:** the Neopixel is the board's onboard single WS2812 RGB LED (GPIO48), not an external strip, so there's no separate strip wiring or level-shifting concern.
 
-| Signal | MPU6050 | Neopixel | Buzzer |
+| Signal | MPU6050 | Neopixel (onboard) | Buzzer (active) |
 | --- | --- | --- | --- |
-| Power | VCC → 3.3V | VCC → 3.3V/5V per strip spec | VCC → 3.3V |
-| Ground | GND → GND | GND → GND | GND → GND |
-| Data | SDA → GPIO (I2C SDA) | DIN → GPIO (with \~300–500Ω resistor inline) | signal → GPIO (PWM-capable pin) |
-| Clock | SCL → GPIO (I2C SCL) | — | — |
+| Power | VCC → 3.3V | onboard, no wiring | + → **GPIO6** (switched power, not a fixed rail) |
+| Ground | GND → GND | onboard | - → GND |
+| Data/Signal | SDA → GPIO8 | GPIO48 (onboard) | *(none — see note below)* |
+| Clock | SCL → GPIO9 | — | — |
 
-- [ ] Confirm your board's default I2C pins (varies by ESP32-S3 devkit — check the vendor pinout diagram) or plan to set them explicitly in code
-- [ ] Confirm the buzzer type (passive vs active) — passive buzzers need a PWM tone, active buzzers just need on/off, and this changes the driver code in Phase 4
-- [ ] Note the Neopixel strip's logic voltage — many strips want 5V data with 3.3V logic boards, in which case a level shifter (or the common inline-resistor workaround) may be needed
+- [x] Confirm your board's default I2C pins — **GPIO8 (SDA) / GPIO9 (SCL)**, the Arduino-ESP32 core's default `Wire.begin()` pins on ESP32-S3 (no strapping-pin conflicts), set explicitly rather than relying on board defaults since the board ID in `platformio.ini` doesn't exactly match the physical hardware
+- [x] Confirm the buzzer type (passive vs active) — **confirmed active** via direct test: connecting VCC to 3.3V and GND with the third pin left unwired produced a steady, continuous tone, meaning it has its own internal driver circuit. This corrects an earlier passive guess based on an old, apparently-unrelated sample sketch that used `tone()`.
+  - **Deviation — no dedicated signal pin:** this buzzer's 3rd pin turned out to be unused (confirmed: it buzzed with just VCC+GND wired, 3rd pin floating). There's no logic-level control input at all — the module just turns on whenever it has power. So control works by switching **power itself**: the wire originally planned for a fixed 3.3V rail instead goes to **GPIO6**, which sources power to the buzzer directly; GND stays on GND; the 3rd/mid pin is left disconnected. Driver code in Phase 5 uses `digitalWrite(GPIO6, HIGH/LOW)` to turn it on/off — confirmed working.
+  - **Note for Phase 5:** driving the buzzer directly off a GPIO (rather than through a transistor) works for bring-up but isn't the most robust long-term design if the buzzer's current draw is on the high side for a GPIO pin (ESP32-S3 GPIOs recommend staying under ~20mA). Revisit with a transistor driver if it proves unreliable.
+  - **PRD implication to revisit in Phase 5:** the PRD's per-state buzzer table calls for a distinct *tone* per concerning state (warning tone / siren / recovery chirp). An active buzzer can't vary pitch — only on/off timing patterns. Will need to use distinct *beep patterns* (e.g. different on/off rhythms) instead of distinct pitches to keep the "tell severity apart by sound alone" requirement.
+- [x] Note the Neopixel strip's logic voltage — **N/A**, onboard single LED (GPIO48), not an external strip
 
 **Physical build**
 
-- [ ] Breadboard the MPU6050, Neopixel, and buzzer per the diagram — do one component at a time, powering up and sanity-checking (multimeter continuity check) before adding the next
-- [ ] Photograph the breadboard from a few angles for the docs — do this now, it's much harder to reconstruct later
-- [ ] If building the wearable form factor, plan strain relief on the wires before final assembly (breadboard wiring is fine for bring-up; a wearable needs soldered, secured connections)
-- [ ] Add the finished wiring diagram + photos + pin table to `/docs`
+- [x] Breadboard the MPU6050, Neopixel, and buzzer per the diagram — done one component at a time, each verified with a real firmware test rather than just continuity: MPU6050 confirmed via I2C scanner (responds at `0x68`), buzzer confirmed via `digitalWrite` on/off toggling on GPIO6, Neopixel confirmed via a red/green/blue color-cycle test on GPIO48
+- [x] Photograph the breadboard from a few angles for the docs — one photo taken and added to `docs/wiring/wiringImage.jpg`
+- [x] If building the wearable form factor, plan strain relief on the wires before final assembly — **decision: staying on breadboard for v1**, powered by a USB powerbank (handheld, not worn or room-mounted). No enclosure/form-factor commitment yet, so strain relief is out of scope for now; revisit if/when a final form factor is chosen.
+- [x] Add the finished wiring diagram + photos + pin table to `/docs` — `docs/wiring/fall-detection-wiring.fzz` (Fritzing source), `docs/wiring/fall-detection-wiring.png` (exported diagram), `docs/wiring/wiringImage.jpg` (photo), pin table in this file and in `README.md`
 
 ## Phase 4 — TinyML Data Collection & Training
 

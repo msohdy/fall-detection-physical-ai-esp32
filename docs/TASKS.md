@@ -38,13 +38,13 @@ Each task below is a checkbox. As you close a task, capture what you'd tell some
 
 ## Phase 2 — GitHub Project Setup
 
-- [ ] Create the GitHub repo (public, since this is going open source) and push the local repo from Phase 1 as the initial commit — include `LICENSE`, `.gitignore`, and the `README.md` stub
-- [ ] Add repo topics/tags for discoverability (`esp32`, `tinyml`, `edge-impulse`, `fall-detection`, `platformio`)
-- [ ] Enable GitHub Issues and set up labels that map to this checklist's structure: `phase-1-setup`, `phase-2-wiring`, `phase-3-training`, `phase-4-firmware`, `phase-5-build`, `phase-6-testing`, `phase-7-docs`, plus `bug` and `help wanted` for once it's public
-- [ ] Create a GitHub Project (the built-in Projects board, free on all plans) with columns `Backlog / In Progress / Done` — turn each unchecked task above into an issue and add it to the board, so outside contributors can see exactly what's left without reading this whole doc
-- [ ] Set milestones matching the seven phases, each with its issues attached, so progress reads as "3 of 7 phases complete" at a glance
-- [ ] Add a `CODEOWNERS` or at least a note in `README.md` on who reviews PRs, once you're ready for outside contributions (can wait until closer to Phase 7)
-- [ ] Turn on GitHub Discussions if you expect questions from people building their own copy — keeps setup/troubleshooting chatter out of Issues
+- [x] Create the GitHub repo (public, since this is going open source) and push the local repo from Phase 1 as the initial commit — created via `gh repo create`: [msohdy/fall-detection-physical-ai-esp32](https://github.com/msohdy/fall-detection-physical-ai-esp32)
+- [x] Add repo topics/tags for discoverability (`esp32`, `tinyml`, `edge-impulse`, `fall-detection`, `platformio`)
+- [x] Enable GitHub Issues and set up labels that map to this checklist's structure — **deviation:** used `phase-1-setup` through `phase-8-docs` (8 phases, not 7 — matches the actual phase count in this file) plus the repo's default `bug`/`help wanted` labels
+- [x] Create a GitHub Project (the built-in Projects board) with columns `Backlog / In Progress / Done` — [Fall Detection Build Roadmap](https://github.com/users/msohdy/projects/3). **Deviation:** one issue per phase (not one per task) was added to the board, each issue linking back to its section of this file for the detailed checklist — keeps the board readable while this file stays the source of truth for task-level detail.
+- [x] Set milestones matching the phases, each with its issue attached — 8 milestones created matching the 8 phases in this file
+- [ ] Add a `CODEOWNERS` or at least a note in `README.md` on who reviews PRs — **explicitly deferred** to closer to Phase 7/8, per plan
+- [ ] Turn on GitHub Discussions — **explicitly deferred** until the project has outside visitors
 
 ## Phase 3 — Wiring
 

@@ -360,7 +360,10 @@
       </div>
       <div class="counter-row">
         <span id="rowCounter">0 rows captured</span>
-        <button id="deleteSelectedBtn" class="danger" disabled>Delete Selected</button>
+        <div style="display:flex; gap:8px;">
+          <button id="deleteSelectedBtn" class="danger" disabled>Delete Selected</button>
+          <button id="clearAllBtn" class="danger" disabled>Clear All</button>
+        </div>
       </div>
       <div class="table-scroll">
         <table>
@@ -417,6 +420,7 @@
   const tableBody = document.getElementById('tableBody');
   const emptyState = document.getElementById('emptyState');
   const deleteSelectedBtn = document.getElementById('deleteSelectedBtn');
+  const clearAllBtn = document.getElementById('clearAllBtn');
   const toastContainer = document.getElementById('toastContainer');
   const chartLegend = document.getElementById('chartLegend');
   const chartCanvas = document.getElementById('chartCanvas');
@@ -574,6 +578,7 @@
     rowCounter.textContent = data.length + (data.length === 1 ? ' row captured' : ' rows captured');
     emptyState.hidden = data.length !== 0;
     downloadBtn.disabled = data.length === 0;
+    clearAllBtn.disabled = data.length === 0;
     deleteSelectedBtn.disabled = selectedRows.size === 0;
   }
 
@@ -590,6 +595,15 @@
   deleteSelectedBtn.addEventListener('click', () => {
     if (selectedRows.size === 0) return;
     data = data.filter((_, i) => !selectedRows.has(i));
+    selectedRows = new Set();
+    fullRerenderTable();
+  });
+
+  clearAllBtn.addEventListener('click', () => {
+    if (data.length === 0) return;
+    const confirmed = window.confirm('Clear all ' + data.length + ' captured rows? This cannot be undone.');
+    if (!confirmed) return;
+    data = [];
     selectedRows = new Set();
     fullRerenderTable();
   });

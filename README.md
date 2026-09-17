@@ -20,7 +20,11 @@ An ESP32-S3 wearable/room device that classifies body state (standing, sitting, 
 
 ## Setup
 
-*(Filled in as each tool is installed — PlatformIO, Edge Impulse, etc.)*
+**Firmware toolchain:** [PlatformIO](https://platformio.org/) as a VS Code extension.
+
+- Board: `esp32s3usbotg` in `platformio.ini` (PlatformIO's board ID for Espressif's official ESP32-S3-USB-OTG devkit). The actual hardware is a generic ESP32-S3-N16R8 dev board (confirmed via `esptool flash_id`: ESP32-S3, 16MB quad-I/O flash, 8MB quad PSRAM) — see [Build Log / Decisions](#build-log--decisions).
+- Framework: `arduino`
+- Confirmed: project builds and uploads over USB (native USB port, shows up as `VID:PID=303A:1001`).
 
 ## Training the Model
 
@@ -42,6 +46,10 @@ An ESP32-S3 wearable/room device that classifies body state (standing, sitting, 
 
 *(A running record of meaningful choices and deviations from the original plan, added as they happen — see `CLAUDE.md`.)*
 
+- **License:** MIT, chosen over Apache-2.0 for simplicity (no patent-grant needs expected for a hobbyist hardware project).
+- **PlatformIO board ID:** `platformio.ini` uses `board = esp32s3usbotg`, which is PlatformIO's ID for Espressif's *official* ESP32-S3-USB-OTG devkit (LCD + 4 physical buttons). The actual hardware is a generic ESP32-S3-N16R8 dev board with none of that — confirmed by asking the chip directly via `esptool flash_id`: ESP32-S3, 16MB quad-I/O flash, 8MB quad PSRAM. This board ID was kept intentionally despite the mismatch; it builds and uploads fine, but its pin macros won't match this hardware, so **Phase 3 wiring will need pins set explicitly in `include/pins.h` rather than relying on board-default pin names**.
+- **Serial-over-USB gotcha (noted for later, not yet applied):** this board has one native USB port (no separate CH340/CP2102 UART bridge), enumerating as `VID:PID=303A:1001`. During bring-up testing, Arduino's `Serial` didn't route through that port until `-DARDUINO_USB_CDC_ON_BOOT=1` was added to `build_flags` — without it, `Serial.print()` silently goes to unused physical UART0 pins instead. The current `main.cpp` doesn't use `Serial` yet, so this flag isn't in `platformio.ini` yet; add it when serial output is actually needed.
+
 ## License
 
-*(Added in Phase 1.)*
+MIT — see [`LICENSE`](LICENSE).

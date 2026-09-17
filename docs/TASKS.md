@@ -21,19 +21,20 @@ Each task below is a checkbox. As you close a task, capture what you'd tell some
 
 ## Phase 1 — Project Setup
 
-- [ ] Install [PlatformIO](https://platformio.org/) as a VS Code extension (free, open source) — install [VS Code](https://code.visualstudio.com/) first if you don't have it, then add the PlatformIO IDE extension from the marketplace
-- [ ] Create a new PlatformIO project: board = `esp32-s3-devkitc-1` (or the exact dev board you're using — check silkscreen/vendor page), framework = `arduino`
-- [ ] Confirm the board builds and uploads a blank sketch before touching sensors — this isolates driver/serial-port issues from wiring issues later
-- [ ] Set up the repo structure for open-sourcing from day one:
+- [x] Install [PlatformIO](https://platformio.org/) as a VS Code extension (free, open source) — install [VS Code](https://code.visualstudio.com/) first if you don't have it, then add the PlatformIO IDE extension from the marketplace
+- [x] Create a new PlatformIO project — **deviation:** created via the PlatformIO "New Project" wizard with `board = esp32s3usbotg`, framework = `arduino`. Note this is technically Espressif's official ESP32-S3-USB-OTG devkit board *definition* (LCD + 4 buttons), not an exact match for the actual hardware (a generic ESP32-S3-N16R8 dev board, confirmed via `esptool flash_id`: ESP32-S3, 16MB quad flash, 8MB quad PSRAM). Kept as-is by choice — pin-mapping mismatches from this will need attention once Phase 3 wiring starts referencing board-specific pin macros.
+- [x] Confirm the board builds and uploads a blank sketch before touching sensors — build + upload over USB confirmed working (COM8, native USB on `VID:PID=303A:1001`). Serial output verification was skipped for now (the wizard's default `main.cpp` doesn't call `Serial.begin()`/print anything) — revisit once `main.cpp` actually needs serial output. Note: this board's native USB port required boot to actually route Arduino's `Serial` there in earlier testing; if serial output looks silent later, check whether `-DARDUINO_USB_CDC_ON_BOOT=1` is needed in `build_flags`.
+- [x] Set up the repo structure for open-sourcing from day one:
   - `/src` — firmware (`main.cpp`, state machine, drivers)
   - `/include` — headers (pin map, config constants)
   - `/lib` — the Edge Impulse exported library (added in Phase 3)
   - `/docs` — wiring diagrams, photos, this task list exported as the README
   - `/data` — sample IMU captures (small representative samples only — raw training data usually stays out of git; note where the full dataset lives)
+  - `/test` — added automatically by the PlatformIO wizard (PlatformIO Unity test runner scaffold); not in the original plan but harmless, left in place
   - `platformio.ini` — board, framework, and library dependencies pinned to versions
-- [ ] Add a `.gitignore` for PlatformIO (`.pio/`, `.vscode/` build artifacts) — PlatformIO's CLI can generate one
-- [ ] Initialize the git repo and pick an open-source license (MIT or Apache-2.0 are the common defaults for hobbyist hardware projects) — add `LICENSE` and a stub `README.md` now so every later phase has somewhere to append notes
-- [ ] Create a Telegram bot via [@BotFather](https://t.me/BotFather) and note the bot token + your chat ID — needed later for the alert call, easiest to get out of the way early since it just requires a Telegram account
+- [x] Add a `.gitignore` for PlatformIO (`.pio/`, `.vscode/` build artifacts) — used PlatformIO wizard's auto-generated `.gitignore`
+- [x] Initialize the git repo and pick an open-source license (MIT or Apache-2.0 are the common defaults for hobbyist hardware projects) — **chose MIT**, copyright line uses the `msohdy` git identity rather than a legal name (fine for an open-source hobby project); added `LICENSE` and a stub `README.md`
+- [x] Create a Telegram bot via [@BotFather](https://t.me/BotFather) and note the bot token + your chat ID — done; token/chat ID currently saved in a local `.env` (now git-ignored) as personal notes. **Note:** `.env` is not read by the firmware — Arduino/PlatformIO can't load it at compile or run time without custom build scripting. Per the PRD, the actual values will move into `include/secrets.h` (a git-ignored C++ header, with a `secrets.h.example` template committed) when Telegram integration is coded in Phase 5.
 
 ## Phase 2 — GitHub Project Setup
 

@@ -1,59 +1,27 @@
 #include <Arduino.h>
-#include <Wire.h>
+#include "mpu6050.h"
+#include "model_inference.h"
 
-// Edge Impulse Data Forwarder sketch (Phase 4): streams MPU6050
-// accel + gyro as comma-separated values over serial, one line per
-// sample. Raw register access -- based on a known-working sketch
-// from an earlier project. Not the final firmware -- see Phase 5.
+// Phase 5 bring-up test: collects one window, runs inference, prints
+// the predicted label. Not the final firmware -- confirms the driver +
+// inference pipeline works before building the state machine on top of it.
 
-#define SDA_PIN 8
-#define SCL_PIN 9
-#define MPU_ADDR 0x68
-#define ACCEL_SCALE 16384.0
-#define GYRO_SCALE 131.0
-#define GRAVITY 9.80665
+float window[MODEL_INPUT_FEATURES];
 
 void setup() {
   Serial.begin(115200);
   delay(1000);
-  Wire.begin(SDA_PIN, SCL_PIN);
-
-  // Wake MPU (clear sleep bit in power management register)
-  Wire.beginTransmission(MPU_ADDR);
-  Wire.write(0x6B);
-  Wire.write(0);
-  Wire.endTransmission(true);
-
-  Serial.println("accX,accY,accZ,gyrX,gyrY,gyrZ");
+  mpu6050Init();
+  Serial.println("Phase 5 bring-up: MPU6050 + inference pipeline");
 }
 
 void loop() {
-  Wire.beginTransmission(MPU_ADDR);
-  Wire.write(0x3B);  // starting register: accel X high byte
-  Wire.endTransmission(false);
-  Wire.requestFrom(MPU_ADDR, 14);  // accel (6) + temp (2) + gyro (6)
+  for (int i = 0; i < MODEL_WINDOW_SIZE; i++) {
+    mpu6050ReadSample(&window[i * MODEL_SENSOR_CHANNELS]);
+    delay(20);  // ~50Hz, matches training data rate
+  }
 
-  int16_t rawAx = (Wire.read() << 8) | Wire.read();
-  int16_t rawAy = (Wire.read() << 8) | Wire.read();
-  int16_t rawAz = (Wire.read() << 8) | Wire.read();
-  Wire.read(); Wire.read();  // discard temperature
-  int16_t rawGx = (Wire.read() << 8) | Wire.read();
-  int16_t rawGy = (Wire.read() << 8) | Wire.read();
-  int16_t rawGz = (Wire.read() << 8) | Wire.read();
-
-  float ax = (rawAx / ACCEL_SCALE) * GRAVITY;
-  float ay = (rawAy / ACCEL_SCALE) * GRAVITY;
-  float az = (rawAz / ACCEL_SCALE) * GRAVITY;
-  float gx = rawGx / GYRO_SCALE;
-  float gy = rawGy / GYRO_SCALE;
-  float gz = rawGz / GYRO_SCALE;
-
-  Serial.print(ax, 3); Serial.print(",");
-  Serial.print(ay, 3); Serial.print(",");
-  Serial.print(az, 3); Serial.print(",");
-  Serial.print(gx, 3); Serial.print(",");
-  Serial.print(gy, 3); Serial.print(",");
-  Serial.println(gz, 3);
-
-  delay(20);  // ~50 Hz
+  int predicted = modelPredict(window);
+  Serial.print("Predicted: ");
+  Serial.println(modelLabel(predicted));
 }

@@ -1,0 +1,702 @@
+<!doctype html>
+<!--
+  Serial Data Logger
+  -------------------
+  Logs CSV-style lines (e.g. "value1,value2,value3\n") from a
+  microcontroller over USB using the Web Serial API.
+
+  Requirements:
+  - Chromium-based browser only (Chrome, Edge). Firefox/Safari do not
+    support Web Serial.
+  - Must be served over HTTPS or from localhost/file:// -- Web Serial
+    is blocked on plain HTTP.
+  - Must be opened as a direct browser tab, not embedded in an iframe,
+    or the permission prompt will not appear reliably.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Serial Data Logger</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --panel: #ffffff;
+    --border: #d8dbe0;
+    --text: #1c1e21;
+    --muted: #6b7280;
+    --accent: #2563eb;
+    --accent-hover: #1d4ed8;
+    --danger: #dc2626;
+    --danger-hover: #b91c1c;
+    --ok: #16a34a;
+    --ok-hover: #128a3e;
+    --warn: #d97706;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px;
+    font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  h1 { font-size: 20px; margin: 0 0 16px; }
+  h2 { font-size: 14px; margin: 0 0 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .container { max-width: 1280px; margin: 0 auto; }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 360px 1fr;
+    gap: 16px;
+    align-items: start;
+  }
+  .left-col {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .full-width { grid-column: 1 / -1; }
+
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: 1fr; }
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+  }
+  .row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    align-items: flex-end;
+  }
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .field label {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  input[type="text"], input[type="number"], select {
+    padding: 7px 9px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 13px;
+    min-width: 120px;
+  }
+  button {
+    padding: 8px 14px;
+    border: none;
+    border-radius: 6px;
+    background: var(--accent);
+    color: white;
+    font-size: 13px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: background 0.15s;
+  }
+  button:hover:not(:disabled) { background: var(--accent-hover); }
+  button:disabled { background: #b9c2cf; cursor: not-allowed; }
+  button.danger { background: var(--danger); }
+  button.danger:hover:not(:disabled) { background: var(--danger-hover); }
+  button.secondary { background: #6b7280; }
+  button.secondary:hover:not(:disabled) { background: #4b5563; }
+
+  #startStopBtn.state-start:not(:disabled) { background: var(--ok); }
+  #startStopBtn.state-start:not(:disabled):hover { background: var(--ok-hover); }
+  #startStopBtn.state-stop:not(:disabled) { background: var(--danger); }
+  #startStopBtn.state-stop:not(:disabled):hover { background: var(--danger-hover); }
+
+  .status-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--danger);
+    display: inline-block;
+    flex-shrink: 0;
+  }
+  .dot.connected { background: var(--ok); }
+  .dot.connecting { background: var(--warn); }
+
+  .field-labels-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+  }
+  .field-labels-grid input { width: 110px; }
+
+  .live-monitor {
+    background: #0f1115;
+    color: #9be89b;
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 12.5px;
+    padding: 12px 14px;
+    border-radius: 6px;
+    height: 460px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+  }
+
+  .counter-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+  .counter-row span { font-size: 13px; color: var(--muted); }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  thead th {
+    text-align: left;
+    background: #f0f1f3;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+  }
+  tbody td {
+    padding: 5px 8px;
+    border-bottom: 1px solid #eef0f2;
+  }
+  tbody tr:hover { background: #fafbfc; }
+  .table-scroll {
+    max-height: 420px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .row-del-btn {
+    background: transparent;
+    color: var(--danger);
+    padding: 2px 6px;
+    font-size: 14px;
+    line-height: 1;
+  }
+  .row-del-btn:hover:not(:disabled) { background: #fde8e8; }
+
+  .toast-container {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 999;
+  }
+  .toast {
+    background: #1c1e21;
+    color: white;
+    padding: 10px 16px;
+    border-radius: 6px;
+    font-size: 13px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.2s, transform 0.2s;
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+
+  .empty-state {
+    padding: 24px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .unsupported {
+    background: #fff4e5;
+    border: 1px solid #f5c46c;
+    color: #7a4d00;
+    padding: 12px 16px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Serial Data Logger</h1>
+
+  <div id="unsupportedBanner" class="unsupported" hidden>
+    Web Serial API is not available in this browser. Please open this page in
+    Chrome or Edge (desktop), served over HTTPS or from a local file/localhost.
+  </div>
+
+  <div class="layout">
+    <div class="left-col">
+      <!-- Connection -->
+      <div class="panel">
+        <h2>Connection</h2>
+        <div class="row">
+          <div class="field">
+            <label for="baudRate">Baud rate</label>
+            <select id="baudRate">
+              <option value="9600">9600</option>
+              <option value="19200">19200</option>
+              <option value="38400">38400</option>
+              <option value="57600">57600</option>
+              <option value="115200" selected>115200</option>
+              <option value="230400">230400</option>
+              <option value="460800">460800</option>
+              <option value="921600">921600</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>&nbsp;</label>
+            <button id="connectBtn">Connect Serial</button>
+          </div>
+        </div>
+        <div class="row" style="margin-top: 12px;">
+          <div class="status-line">
+            <span id="statusDot" class="dot"></span>
+            <span id="statusText">Disconnected</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Configuration -->
+      <div class="panel">
+        <h2>Data Configuration</h2>
+        <div class="row">
+          <div class="field" style="flex: 1;">
+            <label for="fileName">File name</label>
+            <input type="text" id="fileName" placeholder="sensor_data">
+          </div>
+          <div class="field">
+            <label for="numFields">Number of fields</label>
+            <input type="number" id="numFields" min="1" max="20" value="3">
+          </div>
+        </div>
+        <label style="font-size:12px; color: var(--muted); display:block; margin-top:12px;">Field labels (click to rename)</label>
+        <div id="fieldLabelsGrid" class="field-labels-grid"></div>
+      </div>
+    </div>
+
+    <!-- Live Monitor -->
+    <div class="panel">
+      <h2>Live Monitor</h2>
+      <div id="liveMonitor" class="live-monitor"></div>
+    </div>
+
+    <!-- Captured Data -->
+    <div class="panel full-width">
+      <h2>Captured Data</h2>
+      <div class="row" style="margin-bottom: 14px;">
+        <button id="startStopBtn" class="state-start" disabled>Start Logging</button>
+        <button id="downloadBtn" class="secondary" disabled>Download CSV</button>
+      </div>
+      <div class="counter-row">
+        <span id="rowCounter">0 rows captured</span>
+        <button id="deleteSelectedBtn" class="danger" disabled>Delete Selected</button>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr id="tableHeadRow"></tr>
+          </thead>
+          <tbody id="tableBody"></tbody>
+        </table>
+        <div id="emptyState" class="empty-state">No data captured yet.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---- State ----
+  let port = null;
+  let reader = null;
+  let readableStreamClosed = null;
+  let keepReading = false;
+  let isLogging = false;
+  let lineBuffer = '';
+  let fieldLabels = ['Field_1', 'Field_2', 'Field_3'];
+  /** @type {string[][]} */
+  let data = [];
+  /** @type {Set<number>} indices into `data` currently checked for bulk delete */
+  let selectedRows = new Set();
+
+  // ---- DOM refs ----
+  const unsupportedBanner = document.getElementById('unsupportedBanner');
+  const baudRateEl = document.getElementById('baudRate');
+  const connectBtn = document.getElementById('connectBtn');
+  const statusDot = document.getElementById('statusDot');
+  const statusText = document.getElementById('statusText');
+  const fileNameEl = document.getElementById('fileName');
+  const numFieldsEl = document.getElementById('numFields');
+  const fieldLabelsGrid = document.getElementById('fieldLabelsGrid');
+  const startStopBtn = document.getElementById('startStopBtn');
+  const downloadBtn = document.getElementById('downloadBtn');
+  const rowCounter = document.getElementById('rowCounter');
+  const liveMonitor = document.getElementById('liveMonitor');
+  const tableHeadRow = document.getElementById('tableHeadRow');
+  const tableBody = document.getElementById('tableBody');
+  const emptyState = document.getElementById('emptyState');
+  const deleteSelectedBtn = document.getElementById('deleteSelectedBtn');
+  const toastContainer = document.getElementById('toastContainer');
+
+  // ---- Toast ----
+  function showToast(message) {
+    const el = document.createElement('div');
+    el.className = 'toast';
+    el.textContent = message;
+    toastContainer.appendChild(el);
+    requestAnimationFrame(() => el.classList.add('show'));
+    setTimeout(() => {
+      el.classList.remove('show');
+      setTimeout(() => el.remove(), 250);
+    }, 3500);
+  }
+
+  // ---- Status ----
+  function setStatus(state) {
+    // state: 'disconnected' | 'connecting' | 'connected'
+    statusDot.className = 'dot' + (state === 'connected' ? ' connected' : state === 'connecting' ? ' connecting' : '');
+    statusText.textContent = state === 'connected' ? 'Connected' : state === 'connecting' ? 'Connecting…' : 'Disconnected';
+    connectBtn.textContent = state === 'connected' ? 'Disconnect' : 'Connect Serial';
+    connectBtn.disabled = state === 'connecting';
+    startStopBtn.disabled = state !== 'connected';
+    if (state !== 'connected' && isLogging) {
+      stopLogging();
+    }
+  }
+
+  // ---- Field labels ----
+  function renderFieldLabelsGrid() {
+    fieldLabelsGrid.innerHTML = '';
+    fieldLabels.forEach((label, i) => {
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.value = label;
+      input.dataset.index = String(i);
+      input.addEventListener('input', () => {
+        fieldLabels[i] = input.value || ('Field_' + (i + 1));
+        updateHeaderCell(i);
+      });
+      fieldLabelsGrid.appendChild(input);
+    });
+  }
+
+  function setNumFields(n) {
+    n = Math.max(1, Math.min(20, n | 0));
+    const newLabels = [];
+    for (let i = 0; i < n; i++) {
+      newLabels.push(fieldLabels[i] || ('Field_' + (i + 1)));
+    }
+    fieldLabels = newLabels;
+    numFieldsEl.value = String(n);
+    renderFieldLabelsGrid();
+    renderTableHead();
+    fullRerenderTable();
+  }
+
+  numFieldsEl.addEventListener('change', () => {
+    setNumFields(parseInt(numFieldsEl.value, 10) || 1);
+  });
+
+  // ---- Table rendering ----
+  function renderTableHead() {
+    tableHeadRow.innerHTML = '';
+    const selectTh = document.createElement('th');
+    selectTh.style.width = '28px';
+    tableHeadRow.appendChild(selectTh);
+    const idxTh = document.createElement('th');
+    idxTh.textContent = '#';
+    idxTh.style.width = '40px';
+    tableHeadRow.appendChild(idxTh);
+    fieldLabels.forEach((label, i) => {
+      const th = document.createElement('th');
+      th.textContent = label;
+      th.dataset.colIndex = String(i);
+      tableHeadRow.appendChild(th);
+    });
+    const delTh = document.createElement('th');
+    delTh.style.width = '36px';
+    tableHeadRow.appendChild(delTh);
+  }
+
+  function updateHeaderCell(i) {
+    const th = tableHeadRow.querySelector('th[data-col-index="' + i + '"]');
+    if (th) th.textContent = fieldLabels[i];
+  }
+
+  function renderRow(row, index) {
+    const tr = document.createElement('tr');
+    tr.dataset.rowIndex = String(index);
+
+    const selectTd = document.createElement('td');
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = selectedRows.has(index);
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked) selectedRows.add(index);
+      else selectedRows.delete(index);
+      deleteSelectedBtn.disabled = selectedRows.size === 0;
+    });
+    selectTd.appendChild(checkbox);
+    tr.appendChild(selectTd);
+
+    const idxTd = document.createElement('td');
+    idxTd.textContent = String(index + 1);
+    tr.appendChild(idxTd);
+
+    for (let i = 0; i < fieldLabels.length; i++) {
+      const td = document.createElement('td');
+      td.textContent = row[i] !== undefined ? row[i] : '';
+      tr.appendChild(td);
+    }
+
+    const delTd = document.createElement('td');
+    const delBtn = document.createElement('button');
+    delBtn.className = 'row-del-btn';
+    delBtn.textContent = '✕';
+    delBtn.title = 'Delete this row';
+    delBtn.addEventListener('click', () => deleteRow(index));
+    delTd.appendChild(delBtn);
+    tr.appendChild(delTd);
+
+    return tr;
+  }
+
+  function appendRowToTable(row) {
+    const index = data.length - 1;
+    tableBody.appendChild(renderRow(row, index));
+    autoScrollIfNeeded();
+  }
+
+  function autoScrollIfNeeded() {
+    const scrollEl = tableBody.closest('.table-scroll');
+    if (!scrollEl) return;
+    const nearBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 60;
+    if (nearBottom) scrollEl.scrollTop = scrollEl.scrollHeight;
+  }
+
+  function fullRerenderTable() {
+    tableBody.innerHTML = '';
+    const frag = document.createDocumentFragment();
+    data.forEach((row, i) => frag.appendChild(renderRow(row, i)));
+    tableBody.appendChild(frag);
+    updateCounters();
+  }
+
+  function updateCounters() {
+    rowCounter.textContent = data.length + (data.length === 1 ? ' row captured' : ' rows captured');
+    emptyState.hidden = data.length !== 0;
+    downloadBtn.disabled = data.length === 0;
+    deleteSelectedBtn.disabled = selectedRows.size === 0;
+  }
+
+  function deleteRow(index) {
+    data.splice(index, 1);
+    selectedRows.delete(index);
+    // Shift down any selected indices above the removed one
+    const shifted = new Set();
+    selectedRows.forEach(i => shifted.add(i > index ? i - 1 : i));
+    selectedRows = shifted;
+    fullRerenderTable();
+  }
+
+  deleteSelectedBtn.addEventListener('click', () => {
+    if (selectedRows.size === 0) return;
+    data = data.filter((_, i) => !selectedRows.has(i));
+    selectedRows = new Set();
+    fullRerenderTable();
+  });
+
+  // ---- Live monitor ----
+  const liveLines = [];
+  const LIVE_MONITOR_MAX_LINES = 200;
+  function pushLiveLine(line) {
+    liveLines.push(line);
+    if (liveLines.length > LIVE_MONITOR_MAX_LINES) liveLines.shift();
+    liveMonitor.textContent = liveLines.join('\n');
+    liveMonitor.scrollTop = liveMonitor.scrollHeight;
+  }
+
+  // ---- Incoming line handling ----
+  function handleLine(line) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) return;
+    pushLiveLine(trimmed);
+    if (!isLogging) return;
+    const values = trimmed.split(',').map(v => v.trim());
+    data.push(values);
+    appendRowToTable(values);
+    updateCounters();
+  }
+
+  // ---- Logging start/stop ----
+  function startLogging() {
+    isLogging = true;
+    startStopBtn.textContent = 'Stop Logging';
+    startStopBtn.classList.remove('state-start');
+    startStopBtn.classList.add('state-stop');
+  }
+  function stopLogging() {
+    isLogging = false;
+    startStopBtn.textContent = 'Start Logging';
+    startStopBtn.classList.remove('state-stop');
+    startStopBtn.classList.add('state-start');
+  }
+  startStopBtn.addEventListener('click', () => {
+    if (isLogging) stopLogging();
+    else startLogging();
+  });
+
+  // ---- CSV export ----
+  function csvEscape(value) {
+    const str = String(value ?? '');
+    if (/[",\n]/.test(str)) {
+      return '"' + str.replace(/"/g, '""') + '"';
+    }
+    return str;
+  }
+
+  function resolveFileName() {
+    let name = fileNameEl.value.trim();
+    if (!name) name = 'sensor_data';
+    if (!/\.csv$/i.test(name)) name += '.csv';
+    return name;
+  }
+
+  downloadBtn.addEventListener('click', () => {
+    const lines = [];
+    lines.push(fieldLabels.map(csvEscape).join(','));
+    data.forEach(row => {
+      lines.push(fieldLabels.map((_, i) => csvEscape(row[i] !== undefined ? row[i] : '')).join(','));
+    });
+    const csvText = lines.join('\n');
+    const blob = new Blob([csvText], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = resolveFileName();
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+
+  // ---- Serial connection ----
+  async function connectSerial() {
+    if (port) {
+      await disconnectSerial(false);
+      return;
+    }
+    try {
+      setStatus('connecting');
+      const selectedPort = await navigator.serial.requestPort();
+      const baudRate = parseInt(baudRateEl.value, 10) || 115200;
+      await selectedPort.open({ baudRate });
+      port = selectedPort;
+      setStatus('connected');
+      keepReading = true;
+      readLoop();
+    } catch (err) {
+      if (err && err.name === 'NotFoundError') {
+        // User cancelled the port picker -- not an error state.
+        setStatus('disconnected');
+        return;
+      }
+      console.warn('Serial connect failed:', err);
+      setStatus('disconnected');
+    }
+  }
+
+  async function readLoop() {
+    const textDecoder = new TextDecoderStream();
+    readableStreamClosed = port.readable.pipeTo(textDecoder.writable).catch(() => {});
+    reader = textDecoder.readable.getReader();
+    lineBuffer = '';
+    try {
+      while (keepReading) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value) {
+          lineBuffer += value;
+          const parts = lineBuffer.split(/\r\n|\n|\r/);
+          lineBuffer = parts.pop();
+          for (const line of parts) handleLine(line);
+        }
+      }
+    } catch (err) {
+      console.warn('Serial read error:', err);
+      await handleUnexpectedDisconnect();
+      return;
+    } finally {
+      try { reader.releaseLock(); } catch (e) {}
+    }
+  }
+
+  async function disconnectSerial(unexpected) {
+    keepReading = false;
+    try {
+      if (reader) await reader.cancel();
+    } catch (e) {}
+    if (readableStreamClosed) {
+      try { await readableStreamClosed; } catch (e) {}
+    }
+    try {
+      if (port) await port.close();
+    } catch (e) {}
+    reader = null;
+    readableStreamClosed = null;
+    const wasLogging = isLogging;
+    port = null;
+    setStatus('disconnected');
+    if (unexpected) {
+      if (wasLogging) stopLogging();
+      showToast('Device disconnected — logging stopped. Captured data was kept.');
+    }
+  }
+
+  async function handleUnexpectedDisconnect() {
+    await disconnectSerial(true);
+  }
+
+  navigator.serial && navigator.serial.addEventListener('disconnect', (event) => {
+    if (port && event.target === port) {
+      handleUnexpectedDisconnect();
+    }
+  });
+
+  connectBtn.addEventListener('click', connectSerial);
+
+  // ---- Feature detection ----
+  if (!('serial' in navigator)) {
+    unsupportedBanner.hidden = false;
+    connectBtn.disabled = true;
+  }
+
+  // ---- Init ----
+  setNumFields(3);
+  renderTableHead();
+  updateCounters();
+  setStatus('disconnected');
+})();
+</script>
+</body>
+</html>

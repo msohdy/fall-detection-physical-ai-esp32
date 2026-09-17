@@ -55,5 +55,5 @@ void loop() {
   Serial.print(gy, 3); Serial.print(",");
   Serial.println(gz, 3);
 
-  delay(10);  // ~100 Hz
+  delay(20);  // ~50 Hz
 }

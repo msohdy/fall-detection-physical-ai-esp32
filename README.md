@@ -51,6 +51,15 @@ The Neopixel is the board's onboard single WS2812 RGB LED, not an external strip
 - Framework: `arduino`
 - Confirmed: project builds and uploads over USB (native USB port, shows up as `VID:PID=303A:1001`).
 
+## Data Collection Tooling
+
+**[`tools/serial-data-logger.html`](tools/serial-data-logger.html)** — a self-contained Web Serial page (Chrome/Edge only) for capturing MPU6050 samples to CSV. Built after two Edge Impulse ingestion paths turned out to be dead ends on this setup:
+
+1. `edge-impulse-cli` (for the classic Data Forwarder) failed to install — one dependency needs native compilation via Visual Studio Build Tools, which aren't installed.
+2. Edge Impulse Studio's browser-based "Connect a new device" WebSerial flow requires the device firmware to speak Edge Impulse's AT-command protocol — a different thing entirely from plain CSV serial output, and not worth implementing just for data collection.
+
+Instead: connect to the board, log incoming CSV lines to an editable table (delete bad rows individually or in bulk), and export a clean CSV per recording session. Those files get imported into Edge Impulse via Studio's **Data acquisition → Upload data** CSV wizard.
+
 ## Training the Model
 
 *(Filled in during Phase 4 — dataset, class list, and how to reproduce training.)*

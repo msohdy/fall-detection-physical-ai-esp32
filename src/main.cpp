@@ -1,27 +1,61 @@
 #include <Arduino.h>
-#include "mpu6050.h"
-#include "model_inference.h"
+#include "neopixel_driver.h"
+#include "buzzer_driver.h"
 
-// Phase 5 bring-up test: collects one window, runs inference, prints
-// the predicted label. Not the final firmware -- confirms the driver +
-// inference pipeline works before building the state machine on top of it.
+// Phase 5 bring-up test: cycles through every visual/buzzer state
+// every 4 seconds so each color and beep pattern can be confirmed by
+// eye/ear. Not the final firmware -- see the state machine below.
 
-float window[MODEL_INPUT_FEATURES];
+unsigned long lastSwitchMs = 0;
+int stateIndex = 0;
+const unsigned long SWITCH_INTERVAL_MS = 4000;
 
 void setup() {
   Serial.begin(115200);
   delay(1000);
-  mpu6050Init();
-  Serial.println("Phase 5 bring-up: MPU6050 + inference pipeline");
+  neopixelInit();
+  buzzerInit();
+  Serial.println("Neopixel + buzzer bring-up test");
 }
 
 void loop() {
-  for (int i = 0; i < MODEL_WINDOW_SIZE; i++) {
-    mpu6050ReadSample(&window[i * MODEL_SENSOR_CHANNELS]);
-    delay(20);  // ~50Hz, matches training data rate
-  }
+  neopixelTick();
+  buzzerTick();
 
-  int predicted = modelPredict(window);
-  Serial.print("Predicted: ");
-  Serial.println(modelLabel(predicted));
+  if (millis() - lastSwitchMs >= SWITCH_INTERVAL_MS) {
+    lastSwitchMs = millis();
+    stateIndex = (stateIndex + 1) % 6;
+    switch (stateIndex) {
+      case 0:
+        neopixelSetState(VisualState::Standing);
+        buzzerSetState(BuzzerState::Silent);
+        Serial.println("Standing (blue, silent)");
+        break;
+      case 1:
+        neopixelSetState(VisualState::Sitting);
+        buzzerSetState(BuzzerState::Silent);
+        Serial.println("Sitting (cyan, silent)");
+        break;
+      case 2:
+        neopixelSetState(VisualState::Walking);
+        buzzerSetState(BuzzerState::Silent);
+        Serial.println("Walking (green, silent)");
+        break;
+      case 3:
+        neopixelSetState(VisualState::Dizzy);
+        buzzerSetState(BuzzerState::Warning);
+        Serial.println("Dizzy (amber, slow intermittent beep)");
+        break;
+      case 4:
+        neopixelSetState(VisualState::Alarmed);
+        buzzerSetState(BuzzerState::Siren);
+        Serial.println("Alarmed (red pulsing, fast beeping)");
+        break;
+      case 5:
+        neopixelSetState(VisualState::Recovering);
+        buzzerSetState(BuzzerState::Recovery);
+        Serial.println("Recovering (amber->green fade, triple chirp)");
+        break;
+    }
+  }
 }

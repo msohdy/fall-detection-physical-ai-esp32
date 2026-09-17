@@ -1,5 +1,9 @@
 # tools/
 
+## mpu6050-data-forwarder.cpp
+
+The firmware sketch used to collect all Phase 4 training data — streams `accX,accY,accZ,gyrX,gyrY,gyrZ` over serial at ~50Hz for `serial-data-logger.html` to capture. Archived here once Phase 5 replaced `src/main.cpp` with the real firmware. PlatformIO only compiles `src/`, so to reuse this (e.g. to collect more training data later), copy it into `src/main.cpp`, rebuild, and reflash.
+
 ## serial-data-logger.html
 
 A self-contained Web Serial page (Chrome/Edge only) for capturing MPU6050 CSV data during Phase 4 data collection. No build step, no server — just open the file directly in a Chromium browser.

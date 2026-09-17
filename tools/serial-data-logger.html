@@ -229,6 +229,51 @@
     margin-bottom: 16px;
     font-size: 13px;
   }
+
+  .chart-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  .chart-legend-chip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: #f7f8fa;
+    font-size: 12px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .chart-legend-chip.off {
+    opacity: 0.4;
+  }
+  .chart-legend-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .chart-hint {
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+  .chart-canvas-wrap {
+    position: relative;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #fff;
+  }
+  #chartCanvas {
+    display: block;
+    width: 100%;
+    height: 260px;
+    cursor: crosshair;
+  }
 </style>
 </head>
 <body>
@@ -282,7 +327,7 @@
           </div>
           <div class="field">
             <label for="numFields">Number of fields</label>
-            <input type="number" id="numFields" min="1" max="20" value="3">
+            <input type="number" id="numFields" min="1" max="20" value="6">
           </div>
         </div>
         <label style="font-size:12px; color: var(--muted); display:block; margin-top:12px;">Field labels (click to rename)</label>
@@ -294,6 +339,16 @@
     <div class="panel">
       <h2>Live Monitor</h2>
       <div id="liveMonitor" class="live-monitor"></div>
+    </div>
+
+    <!-- Data Chart -->
+    <div class="panel full-width">
+      <h2>Data Chart</h2>
+      <div class="chart-hint">Each field is scaled independently so its shape is visible regardless of units. Click a legend chip to hide/show a field. Click and drag on the chart to select a range of rows, then use "Delete Selected" below to remove them.</div>
+      <div id="chartLegend" class="chart-legend"></div>
+      <div class="chart-canvas-wrap">
+        <canvas id="chartCanvas"></canvas>
+      </div>
     </div>
 
     <!-- Captured Data -->
@@ -333,11 +388,17 @@
   let keepReading = false;
   let isLogging = false;
   let lineBuffer = '';
-  let fieldLabels = ['Field_1', 'Field_2', 'Field_3'];
+  let fieldLabels = ['ax', 'ay', 'az', 'gx', 'gy', 'gz'];
   /** @type {string[][]} */
   let data = [];
   /** @type {Set<number>} indices into `data` currently checked for bulk delete */
   let selectedRows = new Set();
+  /** @type {Set<number>} field indices currently shown on the chart */
+  let visibleFields = new Set();
+  let chartDrag = null; // { startIndex, currentIndex } while dragging a selection
+  let chartRenderScheduled = false;
+  const CHART_COLORS = ['#2563eb', '#dc2626', '#16a34a', '#d97706', '#7c3aed', '#0891b2', '#db2777', '#65a30d'];
+  const MAX_CHART_POINTS = 1500;
 
   // ---- DOM refs ----
   const unsupportedBanner = document.getElementById('unsupportedBanner');
@@ -357,6 +418,9 @@
   const emptyState = document.getElementById('emptyState');
   const deleteSelectedBtn = document.getElementById('deleteSelectedBtn');
   const toastContainer = document.getElementById('toastContainer');
+  const chartLegend = document.getElementById('chartLegend');
+  const chartCanvas = document.getElementById('chartCanvas');
+  const chartCtx = chartCanvas.getContext('2d');
 
   // ---- Toast ----
   function showToast(message) {
@@ -395,6 +459,7 @@
       input.addEventListener('input', () => {
         fieldLabels[i] = input.value || ('Field_' + (i + 1));
         updateHeaderCell(i);
+        renderChartLegend();
       });
       fieldLabelsGrid.appendChild(input);
     });
@@ -408,8 +473,10 @@
     }
     fieldLabels = newLabels;
     numFieldsEl.value = String(n);
+    visibleFields = new Set(fieldLabels.map((_, i) => i));
     renderFieldLabelsGrid();
     renderTableHead();
+    renderChartLegend();
     fullRerenderTable();
   }
 
@@ -500,6 +567,7 @@
     data.forEach((row, i) => frag.appendChild(renderRow(row, i)));
     tableBody.appendChild(frag);
     updateCounters();
+    scheduleChartRender();
   }
 
   function updateCounters() {
@@ -526,6 +594,140 @@
     fullRerenderTable();
   });
 
+  // ---- Chart ----
+  function renderChartLegend() {
+    chartLegend.innerHTML = '';
+    fieldLabels.forEach((label, i) => {
+      const chip = document.createElement('div');
+      chip.className = 'chart-legend-chip' + (visibleFields.has(i) ? '' : ' off');
+      const swatch = document.createElement('span');
+      swatch.className = 'chart-legend-swatch';
+      swatch.style.background = CHART_COLORS[i % CHART_COLORS.length];
+      chip.appendChild(swatch);
+      const text = document.createElement('span');
+      text.textContent = label;
+      chip.appendChild(text);
+      chip.addEventListener('click', () => {
+        if (visibleFields.has(i)) visibleFields.delete(i);
+        else visibleFields.add(i);
+        renderChartLegend();
+        scheduleChartRender();
+      });
+      chartLegend.appendChild(chip);
+    });
+  }
+
+  function scheduleChartRender() {
+    if (chartRenderScheduled) return;
+    chartRenderScheduled = true;
+    requestAnimationFrame(() => {
+      chartRenderScheduled = false;
+      renderChart();
+    });
+  }
+
+  /** Maps a canvas pixel x-coordinate back to the nearest original row index. */
+  function chartXToIndex(pixelX) {
+    if (data.length === 0) return 0;
+    const w = chartCanvas.width || 1;
+    const fraction = Math.min(1, Math.max(0, pixelX / w));
+    return Math.round(fraction * (data.length - 1));
+  }
+
+  function renderChart() {
+    // Match the canvas drawing buffer to its displayed CSS size.
+    const cssWidth = chartCanvas.clientWidth || 600;
+    const cssHeight = chartCanvas.clientHeight || 260;
+    if (chartCanvas.width !== cssWidth) chartCanvas.width = cssWidth;
+    if (chartCanvas.height !== cssHeight) chartCanvas.height = cssHeight;
+    const w = chartCanvas.width;
+    const h = chartCanvas.height;
+    const pad = 8;
+
+    chartCtx.clearRect(0, 0, w, h);
+
+    if (data.length === 0) {
+      chartCtx.fillStyle = '#9aa1ab';
+      chartCtx.font = '13px -apple-system, sans-serif';
+      chartCtx.fillText('No data yet -- start logging to see the chart.', 12, h / 2);
+      return;
+    }
+
+    // Decimate for performance on long recordings; keep contiguous buckets
+    // so drag-selection still maps to a meaningful contiguous row range.
+    const step = Math.max(1, Math.ceil(data.length / MAX_CHART_POINTS));
+    const pointCount = Math.ceil(data.length / step);
+    const xForPoint = (i) => (pointCount <= 1) ? 0 : (i / (pointCount - 1)) * w;
+
+    // Selection / drag highlight (drawn first, underneath the lines)
+    let selStart = null, selEnd = null;
+    if (chartDrag) {
+      selStart = Math.min(chartDrag.startIndex, chartDrag.currentIndex);
+      selEnd = Math.max(chartDrag.startIndex, chartDrag.currentIndex);
+    } else if (selectedRows.size > 0) {
+      selStart = Math.min(...selectedRows);
+      selEnd = Math.max(...selectedRows);
+    }
+    if (selStart !== null) {
+      const x1 = (selStart / Math.max(1, data.length - 1)) * w;
+      const x2 = (selEnd / Math.max(1, data.length - 1)) * w;
+      chartCtx.fillStyle = 'rgba(37, 99, 235, 0.12)';
+      chartCtx.fillRect(x1, 0, Math.max(1, x2 - x1), h);
+    }
+
+    fieldLabels.forEach((label, fieldIndex) => {
+      if (!visibleFields.has(fieldIndex)) return;
+
+      const series = new Array(pointCount);
+      for (let p = 0; p < pointCount; p++) {
+        const origIndex = Math.min(data.length - 1, p * step);
+        const raw = data[origIndex][fieldIndex];
+        const num = parseFloat(raw);
+        series[p] = Number.isFinite(num) ? num : 0;
+      }
+      let min = Math.min(...series);
+      let max = Math.max(...series);
+      if (min === max) { min -= 1; max += 1; }
+
+      chartCtx.strokeStyle = CHART_COLORS[fieldIndex % CHART_COLORS.length];
+      chartCtx.lineWidth = 1.5;
+      chartCtx.beginPath();
+      for (let p = 0; p < pointCount; p++) {
+        const x = xForPoint(p);
+        const norm = (series[p] - min) / (max - min); // 0..1
+        const y = h - pad - norm * (h - pad * 2);
+        if (p === 0) chartCtx.moveTo(x, y);
+        else chartCtx.lineTo(x, y);
+      }
+      chartCtx.stroke();
+    });
+  }
+
+  chartCanvas.addEventListener('mousedown', (e) => {
+    if (data.length === 0) return;
+    const index = chartXToIndex(e.offsetX);
+    chartDrag = { startIndex: index, currentIndex: index };
+    scheduleChartRender();
+  });
+  chartCanvas.addEventListener('mousemove', (e) => {
+    if (!chartDrag) return;
+    chartDrag.currentIndex = chartXToIndex(e.offsetX);
+    scheduleChartRender();
+  });
+  function finishChartDrag() {
+    if (!chartDrag) return;
+    const start = Math.min(chartDrag.startIndex, chartDrag.currentIndex);
+    const end = Math.max(chartDrag.startIndex, chartDrag.currentIndex);
+    for (let i = start; i <= end; i++) selectedRows.add(i);
+    chartDrag = null;
+    fullRerenderTable();
+  }
+  chartCanvas.addEventListener('mouseup', finishChartDrag);
+  chartCanvas.addEventListener('mouseleave', () => {
+    if (chartDrag) finishChartDrag();
+  });
+  window.addEventListener('resize', scheduleChartRender);
+
   // ---- Live monitor ----
   const liveLines = [];
   const LIVE_MONITOR_MAX_LINES = 200;
@@ -546,6 +748,7 @@
     data.push(values);
     appendRowToTable(values);
     updateCounters();
+    scheduleChartRender();
   }
 
   // ---- Logging start/stop ----
@@ -692,9 +895,10 @@
   }
 
   // ---- Init ----
-  setNumFields(3);
+  setNumFields(6);
   renderTableHead();
   updateCounters();
+  renderChart();
   setStatus('disconnected');
 })();
 </script>

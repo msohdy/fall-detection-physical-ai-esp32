@@ -48,12 +48,17 @@
     display: grid;
     grid-template-columns: 360px 1fr;
     gap: 16px;
-    align-items: start;
+    align-items: stretch;
   }
   .left-col {
     display: flex;
     flex-direction: column;
     gap: 16px;
+  }
+  .live-monitor-panel {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
   }
   .full-width { grid-column: 1 / -1; }
 
@@ -81,6 +86,29 @@
   .field label {
     font-size: 12px;
     color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .help-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #dbe0e6;
+    color: #4b5563;
+    font-size: 10px;
+    font-style: normal;
+    font-weight: 700;
+    cursor: help;
+    flex-shrink: 0;
+  }
+  .field-hint {
+    font-size: 11px;
+    color: #9aa1ab;
+    margin-top: 3px;
   }
   input[type="text"], input[type="number"], select {
     padding: 7px 9px;
@@ -102,9 +130,9 @@
   }
   button:hover:not(:disabled) { background: var(--accent-hover); }
   button:disabled { background: #b9c2cf; cursor: not-allowed; }
-  button.danger { background: var(--danger); }
+  button.danger:not(:disabled) { background: var(--danger); }
   button.danger:hover:not(:disabled) { background: var(--danger-hover); }
-  button.secondary { background: #6b7280; }
+  button.secondary:not(:disabled) { background: #6b7280; }
   button.secondary:hover:not(:disabled) { background: #4b5563; }
 
   #startStopBtn.state-start:not(:disabled) { background: var(--ok); }
@@ -145,7 +173,8 @@
     font-size: 12.5px;
     padding: 12px 14px;
     border-radius: 6px;
-    height: 460px;
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
     white-space: pre-wrap;
   }
@@ -292,7 +321,7 @@
         <h2>Connection</h2>
         <div class="row">
           <div class="field">
-            <label for="baudRate">Baud rate</label>
+            <label for="baudRate">Baud rate <span class="help-icon" title="How fast data moves over the USB connection, measured in bits per second. This number must exactly match the value inside Serial.begin(...) in your microcontroller's code -- if it doesn't match, you'll see garbled text or nothing at all. 115200 is the standard default for most Arduino/ESP32 sketches.">?</span></label>
             <select id="baudRate">
               <option value="9600">9600</option>
               <option value="19200">19200</option>
@@ -303,10 +332,11 @@
               <option value="460800">460800</option>
               <option value="921600">921600</option>
             </select>
+            <span class="field-hint">Must match Serial.begin() in your sketch</span>
           </div>
           <div class="field">
             <label>&nbsp;</label>
-            <button id="connectBtn">Connect Serial</button>
+            <button id="connectBtn" style="min-width: 140px;">Connect Serial</button>
           </div>
         </div>
         <div class="row" style="margin-top: 12px;">
@@ -336,7 +366,7 @@
     </div>
 
     <!-- Live Monitor -->
-    <div class="panel">
+    <div class="panel live-monitor-panel">
       <h2>Live Monitor</h2>
       <div id="liveMonitor" class="live-monitor"></div>
     </div>
@@ -402,6 +432,9 @@
   let chartRenderScheduled = false;
   const CHART_COLORS = ['#2563eb', '#dc2626', '#16a34a', '#d97706', '#7c3aed', '#0891b2', '#db2777', '#65a30d'];
   const MAX_CHART_POINTS = 1500;
+  /** @type {string[][]} rows pushed into `data` but not yet appended to the DOM table */
+  let pendingRows = [];
+  let tableFlushScheduled = false;
 
   // ---- DOM refs ----
   const unsupportedBanner = document.getElementById('unsupportedBanner');
@@ -482,6 +515,7 @@
     renderTableHead();
     renderChartLegend();
     fullRerenderTable();
+    syncLiveMonitorHeight();
   }
 
   numFieldsEl.addEventListener('change', () => {
@@ -552,9 +586,34 @@
     return tr;
   }
 
-  function appendRowToTable(row) {
-    const index = data.length - 1;
-    tableBody.appendChild(renderRow(row, index));
+  // Incoming rows are queued and flushed to the DOM once per animation
+  // frame (batched), instead of one appendChild + forced layout read per
+  // row. At high sample rates, doing this per-row makes each row more
+  // expensive as the table grows (forced synchronous layout), which
+  // eventually falls behind the incoming serial stream and causes lag /
+  // stalls. Data capture itself (the `data` array) is never gated on
+  // this -- only the visible table's rendering is deferred.
+  function queueRowForTable(row) {
+    pendingRows.push(row);
+    scheduleTableFlush();
+  }
+
+  function scheduleTableFlush() {
+    if (tableFlushScheduled) return;
+    tableFlushScheduled = true;
+    requestAnimationFrame(flushPendingRows);
+  }
+
+  function flushPendingRows() {
+    tableFlushScheduled = false;
+    if (pendingRows.length === 0) return;
+    const startIndex = data.length - pendingRows.length;
+    const frag = document.createDocumentFragment();
+    pendingRows.forEach((row, offset) => {
+      frag.appendChild(renderRow(row, startIndex + offset));
+    });
+    tableBody.appendChild(frag);
+    pendingRows = [];
     autoScrollIfNeeded();
   }
 
@@ -566,6 +625,10 @@
   }
 
   function fullRerenderTable() {
+    // Any rows still queued from queueRowForTable() are already reflected
+    // in `data` (pushed there immediately) and will be rendered by this
+    // full rebuild, so drop them to avoid a stale/duplicate flush later.
+    pendingRows = [];
     tableBody.innerHTML = '';
     const frag = document.createDocumentFragment();
     data.forEach((row, i) => frag.appendChild(renderRow(row, i)));
@@ -745,6 +808,24 @@
   // ---- Live monitor ----
   const liveLines = [];
   const LIVE_MONITOR_MAX_LINES = 200;
+  const leftColEl = document.querySelector('.left-col');
+  const liveMonitorPanelEl = document.querySelector('.live-monitor-panel');
+
+  // CSS grid's `align-items: stretch` alone is circular here: the live
+  // monitor panel has no independent height ceiling, so it grows with its
+  // own content, which grows the grid row, which grows the panel again.
+  // Measuring the left column's actual height and applying it directly
+  // breaks that loop -- the live monitor panel gets a real fixed height
+  // to scroll within, independent of how much text is inside it.
+  function syncLiveMonitorHeight() {
+    if (!leftColEl || !liveMonitorPanelEl) return;
+    if (window.innerWidth <= 860) {
+      liveMonitorPanelEl.style.height = ''; // stack naturally on narrow layouts
+      return;
+    }
+    liveMonitorPanelEl.style.height = leftColEl.offsetHeight + 'px';
+  }
+  window.addEventListener('resize', syncLiveMonitorHeight);
   function pushLiveLine(line) {
     liveLines.push(line);
     if (liveLines.length > LIVE_MONITOR_MAX_LINES) liveLines.shift();
@@ -760,7 +841,7 @@
     if (!isLogging) return;
     const values = trimmed.split(',').map(v => v.trim());
     data.push(values);
-    appendRowToTable(values);
+    queueRowForTable(values);
     updateCounters();
     scheduleChartRender();
   }

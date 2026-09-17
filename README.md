@@ -60,6 +60,10 @@ The Neopixel is the board's onboard single WS2812 RGB LED, not an external strip
 
 Instead: connect to the board, log incoming CSV lines to an editable table (delete bad rows individually or in bulk), and export a clean CSV per recording session. Those files get imported into Edge Impulse via Studio's **Data acquisition → Upload data** CSV wizard.
 
+![Serial Data Logger](tools/logger-screenshot.png)
+
+See [`tools/README.md`](tools/README.md) for full usage instructions and the data collection pipeline diagram.
+
 ## Training the Model
 
 *(Filled in during Phase 4 — dataset, class list, and how to reproduce training.)*

@@ -387,6 +387,8 @@
       <div class="row" style="margin-bottom: 14px;">
         <button id="startStopBtn" class="state-start" disabled>Start Logging</button>
         <button id="downloadBtn" class="secondary" disabled>Download CSV</button>
+        <button id="loadCsvBtn" class="secondary">Load CSV</button>
+        <input type="file" id="loadCsvInput" accept=".csv,text/csv" style="display:none;">
       </div>
       <div class="counter-row">
         <span id="rowCounter">0 rows captured</span>
@@ -447,6 +449,8 @@
   const fieldLabelsGrid = document.getElementById('fieldLabelsGrid');
   const startStopBtn = document.getElementById('startStopBtn');
   const downloadBtn = document.getElementById('downloadBtn');
+  const loadCsvBtn = document.getElementById('loadCsvBtn');
+  const loadCsvInput = document.getElementById('loadCsvInput');
   const rowCounter = document.getElementById('rowCounter');
   const liveMonitor = document.getElementById('liveMonitor');
   const tableHeadRow = document.getElementById('tableHeadRow');
@@ -896,6 +900,41 @@
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+
+  // ---- Load an existing CSV for review/cleanup ----
+  loadCsvBtn.addEventListener('click', () => {
+    if (data.length > 0) {
+      const confirmed = window.confirm('Loading a CSV will replace the ' + data.length + ' currently captured rows. Continue?');
+      if (!confirmed) return;
+    }
+    loadCsvInput.click();
+  });
+
+  loadCsvInput.addEventListener('change', () => {
+    const file = loadCsvInput.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const lines = String(reader.result).split(/\r\n|\n|\r/).map(l => l.trim()).filter(l => l.length > 0);
+      if (lines.length < 1) {
+        showToast('That CSV appears to be empty.');
+        return;
+      }
+      fieldLabels = lines[0].split(',').map(s => s.trim());
+      data = lines.slice(1).map(line => line.split(',').map(v => v.trim()));
+      selectedRows = new Set();
+      numFieldsEl.value = String(Math.max(1, Math.min(20, fieldLabels.length)));
+      visibleFields = new Set(fieldLabels.map((_, i) => i));
+      renderFieldLabelsGrid();
+      renderTableHead();
+      renderChartLegend();
+      fullRerenderTable();
+      syncLiveMonitorHeight();
+      showToast('Loaded ' + data.length + ' rows from ' + file.name);
+    };
+    reader.readAsText(file);
+    loadCsvInput.value = '';
   });
 
   // ---- Serial connection ----

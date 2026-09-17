@@ -92,28 +92,41 @@ Each task below is a checkbox. As you close a task, capture what you'd tell some
 
 **Per-class collection** (5 classes: standing, sitting, walking, dizzy, fall)
 
-- [ ] Standing / sitting / walking — several minutes each, varied pace and posture, ideally multiple sessions on different days to avoid overfitting to one specific movement style
-- [ ] Dizzy/unsteady — simulate with deliberately irregular gait (staggering, uneven steps); label carefully, expect to need the most retakes since real dizziness can't be reproduced on demand
-- [ ] Fall — **deviation:** since the device is currently handheld (breadboard + powerbank, not worn — see Phase 3), falls are simulated by holding the assembly and mimicking the arm/body motion of falling (quick drop + sudden stop) rather than an actual worn fall onto a mattress. All 5 classes are captured the same handheld way for consistency between classes. **Known limitation to carry into Phase 8 docs:** this fall signature is a proxy, not a real worn-device fall — likely less realistic than the PRD's original plan, and something to revisit if/when a wearable form factor is built.
-- [ ] After each recording session, review samples for mislabeled segments (e.g. the few seconds before/after a fall that are actually "standing") and trim or relabel before they pollute training — this is what the delete-row/bulk-delete features in `tools/serial-data-logger.html` are for
+- [x] Standing / sitting / walking — collected via `tools/serial-data-logger.html` (1399 / 1900 / 1971 samples respectively)
+- [x] Dizzy/unsteady — simulated with deliberately irregular gait; 1886 samples
+- [x] Fall — **deviation:** since the device is handheld (breadboard + powerbank, not worn — see Phase 3), falls are simulated by holding the assembly and mimicking the arm/body motion of falling (quick drop + sudden stop) rather than an actual worn fall onto a mattress; 960 samples (smallest class, as expected). **Known limitation carried into Phase 8 docs:** this fall signature is a proxy, not a real worn-device fall, and the model's confusion matrix shows real evidence of this (see below) — a handheld mimicked fall and a staggering "dizzy" motion end up looking more similar in the IMU signal than a real worn fall would.
+- [x] After each recording session, reviewed samples for mislabeled segments using the chart + drag-select delete in `tools/serial-data-logger.html`. That tool later also gained a **Load CSV** button so already-saved recordings in `data/raw/` can be reopened for a second cleanup pass.
+
+Total: 8116 raw samples across the 5 classes.
 
 **Split & balance**
 
-- [ ] Check class balance in Data Acquisition — fall/dizzy will naturally have fewer samples than standing/walking; either collect more of the minority classes or use Edge Impulse's class-balancing options at training time
-- [ ] Use Edge Impulse's train/validation/test split (default 80/20 train/test, with validation carved from train) — keep some fall/dizzy samples out of training entirely as a held-out sanity check
+- [x] Checked class balance — fall (960) is the smallest class as expected, others range 1399–1971. No explicit rebalancing done; noted as something to revisit if fall-detection accuracy needs further improvement.
+- [x] Train/validation split — 80/20, held out automatically by the training tool (see below) via a shuffled split of the windowed samples.
 
-**Impulse design & training**
+**Impulse design & training — deviation: Edge Impulse abandoned entirely**
 
-- [ ] Build the impulse: Spectral Analysis processing block + Classification (Neural Network) learning block — Edge Impulse's standard template for accelerometer/gyro continuous motion recognition
-- [ ] Tune window size (\~1–2s per the PRD) and window increase/stride to match how quickly a fall actually happens
-- [ ] Train, then check the confusion matrix specifically for fall vs standing/sitting misclassification — a missed fall is far costlier than a false alarm here, so bias data collection and thresholds toward catching every fall
-- [ ] Target ≥90% accuracy on held-out data per the PRD; if a class lags, that's almost always more/cleaner data for that class rather than a bigger model (these devices have tight memory budgets)
+Edge Impulse was dropped as the training platform (not just the data-forwarder connection method noted above). Reasons and what replaced it:
+
+- [x] **Why:** wanted a fully local, reproducible, no-external-account training pipeline consistent with this project's "no external dependency" pattern (same reasoning as building `serial-data-logger.html` instead of relying on Edge Impulse's device-connection flow). Also, a simple 5-class dense-network classifier doesn't need Edge Impulse's Spectral Analysis / DSP blocks — raw windowed IMU samples fed directly into a small dense net work well here.
+- [x] **Built [`tools/tinyml-trainer.html`](../tools/tinyml-trainer.html)** — a self-contained TensorFlow.js page: upload a CSV per class, configure window size / epochs / learning rate / model name, train a `dense(16, relu) → dense(8, relu) → dense(numClasses, softmax)` network entirely in-browser, then export a plain C header with the raw float weight/bias arrays (no TFLite Micro runtime needed — Phase 5 firmware will do a hand-rolled forward pass instead).
+- [x] **Bug found and fixed during training:** the first training runs showed `val_acc` stuck around 0.3–0.5 and bouncing around while `acc` climbed normally to ~0.84 — classic overfitting-looking symptom, but the real cause was that the windowed dataset was built class-by-class in sequence (all "fall" windows, then all "sit", etc.), and TensorFlow.js's `validationSplit` carves its slice off the *end* of the array *before* any epoch shuffling. The validation set was therefore almost entirely just the last class or two, not a representative mix. Fixed by shuffling the windowed `(X, y)` pairs together before training. After the fix, `val_acc` tracked `acc` smoothly as expected.
+- [x] **Added a confusion matrix to the trainer** (computed on the same validation slice tf.js uses internally) after realizing overall accuracy alone doesn't reveal whether "fall" specifically is being missed — which is exactly the PRD's stated priority. It also auto-flags in red if any "fall" validation samples were misclassified.
+- [x] **Window size tuning — this mattered a lot.** Started at window=5 samples (100ms at 50Hz), which is far shorter than the PRD's suggested ~1–2s and produced heavy fall↔dizzy confusion (a 100ms slice can't capture a fall's actual shape). Iterated up:
+
+  | Window size | Duration @ 50Hz | Overall val_acc | Fall samples missed |
+  | --- | --- | --- | --- |
+  | 5 | 0.1s | ~0.87 (comparable to the very first Edge-Impulse-style attempt) | 68/209 (32.5%) |
+  | 50 | 1.0s | 0.958 | 39/191 (20.4%) |
+  | 75 | 1.5s | 0.963 | 23/205 (11.2%) — **accepted for now** |
+
+  Fall↔dizzy remained the dominant confusion at every window size, consistent with the handheld-fall-simulation limitation noted above rather than being purely a hyperparameter problem.
+- [ ] **Not fully met:** the PRD's "zero missed falls" bar is not actually hit — 11.2% of fall validation samples are still misclassified. Explicitly accepted as a known v1 limitation (to document plainly in Phase 8) rather than continuing to iterate indefinitely, given the handheld form factor is the more likely root cause at this point. Revisit if a wearable form factor or more/cleaner fall data becomes available.
 
 **Export**
 
-- [ ] Deploy as a C++/Arduino library from Edge Impulse (TFLite Micro build)
-- [ ] Drop the exported library into `/lib` in the PlatformIO project
-- [ ] Note the exact model version/export date in `/docs` — you'll likely retrain more than once, and open-source users will want to know which model a given firmware release ships with
+- [x] Final model: `include/fall_detection_model_data.h` — window=75 (450 input features = 75 samples × 6 channels), `dense(16)→dense(8)→dense(5)`, labels `fall, sit, stand, walk, dizzy`. No `/lib` dependency needed (no TFLite Micro) — Phase 5 firmware includes this header directly and implements the forward pass by hand.
+- [x] Model version noted here: trained via `tools/tinyml-trainer.html`, window=75, 50 epochs, learning rate 0.001, final train acc 0.999 / val_acc 0.963 (see table above for the tuning history).
 
 ## Phase 5 — Firmware Coding & Pin Configuration
 

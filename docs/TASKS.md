@@ -132,15 +132,15 @@ Edge Impulse was dropped as the training platform (not just the data-forwarder c
 
 **Pin config**
 
-- [ ] Create `include/pins.h` with named constants for every pin used (I2C SDA/SCL, Neopixel data, buzzer) — matches the pin table from Phase 2, so wiring changes only ever touch one file
-- [ ] Add library dependencies to `platformio.ini`: the Edge Impulse export, an MPU6050 driver (e.g. `adafruit/Adafruit MPU6050`), `Adafruit NeoPixel`, and WiFi/HTTPS client (bundled with the ESP32 Arduino core)
+- [ ] Create `include/pins.h` with named constants for every pin used (I2C SDA/SCL = GPIO8/9, Neopixel = GPIO48 onboard, buzzer = GPIO6 switched power) — matches the pin table from Phase 3, so wiring changes only ever touch one file
+- [ ] Add library dependencies to `platformio.ini`: `Adafruit NeoPixel` (already added in Phase 3) and WiFi/HTTPS client (bundled with the ESP32 Arduino core). **Deviation from original plan:** no Edge Impulse export library and no MPU6050 driver library needed — see Drivers below.
 
 **Drivers**
 
-- [ ] MPU6050 read loop — initialize over I2C, pull accel + gyro at the sample rate the Edge Impulse model expects, assemble into the same window format used during data collection (mismatched sample rate/format here is the most common cause of a trained model performing worse on-device than in Edge Impulse's own tests)
-- [ ] TFLite Micro inference call using the exported library — feed the window, read back the predicted class
+- [ ] MPU6050 read loop — **deviation:** use the same raw I2C register access as `tools/mpu6050-data-forwarder.cpp` (registers 0x3B–0x48 via `Wire`), not the `Adafruit_MPU6050` library — an earlier attempt with that library hung with no serial output during Phase 4 bring-up, and the raw-register approach is already proven working at ~50Hz. Sample at 50Hz and assemble a 75-sample window (1.5s) per read, matching exactly what `tools/tinyml-trainer.html` was trained on — mismatched sample rate/window size here is the most common cause of a trained model performing worse on-device than during training.
+- [ ] Model inference — **deviation:** no TFLite Micro. `include/fall_detection_model_data.h` is a plain C header with raw float weight/bias arrays for a `dense(450→16)→dense(16→8)→dense(8→5)` network (see `docs/TASKS.md` Phase 4 and `tools/tinyml-trainer.html`'s header comment for the exact weight layout convention). Write a small hand-rolled forward pass: flatten the 75-sample window (75×6=450 floats) → layer0 (ReLU) → layer1 (ReLU) → layer2 (softmax or just argmax of raw logits) → predicted class index into `LABELS[]`.
 - [ ] Neopixel driver — one function mapping state → color per the PRD's table (standing/sitting/walking = blue/cyan/green, dizzy = amber, alarmed = red pulsing, recovering = amber→green fade)
-- [ ] Buzzer driver — `tone()`/`noTone()` or manual PWM depending on passive vs active buzzer (Phase 2); implement `siren_tick()`, `warning_tone_tick()`, `recovery_tone_tick()` as **non-blocking**, timed off `millis()` — not `delay()`, or the IMU sampling loop stalls mid-tone
+- [ ] Buzzer driver — **deviation:** buzzer is active with no signal pin (Phase 3) — driver is `digitalWrite(BUZZER_PIN, HIGH/LOW)` to switch its power directly, not `tone()`/`noTone()`. Since it can't vary pitch, implement `siren_tick()`, `warning_tone_tick()`, `recovery_tone_tick()` as distinct on/off **beep patterns** (different rhythms per state) instead of distinct tones, and keep them **non-blocking**, timed off `millis()` — not `delay()`, or the IMU sampling loop stalls mid-pattern.
 
 **State machine**
 

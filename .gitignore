@@ -7,3 +7,8 @@
 # Secrets - never commit real values (WiFi creds, Telegram bot token/chat ID)
 .env
 include/secrets.h
+
+# Raw per-session data collection CSVs (Phase 4) - kept locally only.
+# A few representative samples per class are copied into data/ and
+# tracked instead of committing the full raw dataset.
+data/raw/

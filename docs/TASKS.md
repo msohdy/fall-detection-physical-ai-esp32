@@ -155,10 +155,11 @@ Edge Impulse was dropped as the training platform (not just the data-forwarder c
 
 **Telegram integration**
 
-- [ ] Store the bot token, chat ID, and WiFi credentials in a `secrets.h` that's git-ignored (never commit these) — add `secrets.h.example` template to the repo instead
-- [ ] Implement `send_telegram_message()` as an HTTPS POST to the Bot API, called once on ALARMED entry (`alert_sent` flag) and once on RECOVERING→NORMAL resolution
-- [ ] Make the WiFi/Telegram call non-blocking or at least short-timeout — per the PRD, a WiFi failure should mean "local alarm still fires, remote notification skipped this cycle," never a stalled main loop
-- [ ] Wire it all together in `main.cpp`'s loop per the PRD pseudocode; keep the loop itself thin — sample, classify, update LED, tick the state machine
+- [x] Store the bot token, chat ID, and WiFi credentials in a `secrets.h` that's git-ignored (never commit these) — `include/secrets.h` (git-ignored) + `include/secrets.h.example` (committed template). Chat ID was retrieved by messaging the bot once, then fetching `https://api.telegram.org/bot<TOKEN>/getUpdates` and reading the `chat.id` field — the `.env` file from Phase 1 had saved the lookup *URL* instead of the actual numeric ID, so this had to be done properly here.
+- [x] Implement `sendTelegramMessage()` as an HTTPS GET to the Bot API's `sendMessage` endpoint (`include/telegram.h` + `src/telegram.cpp`, using `WiFiClientSecure` + `HTTPClient`), called once on ALARMED entry (`alertSent` flag) and once on RECOVERING→NORMAL resolution. Returns `bool` (success/failure) rather than being fire-and-forget for the fall alert specifically — `alertSent` is only set `true` if the send actually succeeded, so it naturally retries on the next classification if WiFi wasn't ready yet, matching the PRD's pseudocode more precisely than an earlier draft that marked it sent unconditionally.
+  - **Security note:** uses `WiFiClientSecure::setInsecure()` (no certificate pinning) — a common simplification for a hobbyist project, at the cost of no protection against a MITM on the local network. Documented in README's Build Log rather than silently done.
+- [x] Make the WiFi/Telegram call non-blocking or at least short-timeout — `sendTelegramMessage()` checks `WiFi.status()` and returns immediately (no blocking wait) if not already connected; `telegramInit()`'s `WiFi.begin()` call itself is non-blocking (connects in the background). The actual HTTPS GET (only reached when already connected) has a 4-second timeout.
+- [x] Wire it all together in `main.cpp`'s loop per the PRD pseudocode — confirmed working end-to-end: triggering a simulated fall produced a real Telegram message on-device.
 
 ## Phase 6 — Build, Flash & Upload
 

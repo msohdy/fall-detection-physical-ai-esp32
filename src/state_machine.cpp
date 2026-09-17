@@ -92,8 +92,10 @@ void stateMachineUpdate(int predicted) {
 
     case AppState::Alarmed:
       if (!alertSent) {
-        sendTelegramMessage("Fall detected. Siren active.");
-        alertSent = true;  // fire once per event, never resend while ALARMED
+        // Only mark as sent if it actually went through -- if WiFi
+        // isn't connected yet, this naturally retries on the next
+        // classification instead of silently giving up.
+        alertSent = sendTelegramMessage("Fall detected. Siren active.");
       }
       if (isRecoverySign(predicted)) {
         confirmCounter++;

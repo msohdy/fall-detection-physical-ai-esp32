@@ -4,6 +4,7 @@
 #include "neopixel_driver.h"
 #include "buzzer_driver.h"
 #include "state_machine.h"
+#include "telegram.h"
 
 // Main firmware loop. Keeps the loop itself thin per the PRD: sample,
 // classify, tick the state machine and drivers.
@@ -28,6 +29,7 @@ void setup() {
   neopixelInit();
   buzzerInit();
   stateMachineInit();
+  telegramInit();
 
   Serial.println("Fall Detection System starting.");
 }

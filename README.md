@@ -2,7 +2,7 @@
 
 An ESP32-S3 wearable/room device that classifies body state (standing, sitting, walking, dizzy, fall) from MPU6050 motion data using an on-device TinyML model, gives silent per-state Neopixel feedback, sounds a buzzer for concerning states, and sends a Telegram alert to an emergency contact when a fall is confirmed.
 
-**Status:** Phase 5 — Firmware Coding & Pin Configuration
+**Status:** Phase 6 — Build, Flash & Upload
 
 > This README is being filled in phase by phase as the project is built — see `CLAUDE.md` and `docs/TASKS.md`. Sections below will fill in as each phase completes.
 
@@ -86,6 +86,25 @@ Edge Impulse was dropped entirely as the training platform too (not just the dat
 
 Full model header: [`include/fall_detection_model_data.h`](include/fall_detection_model_data.h). See [`tools/README.md`](tools/README.md) for the trainer's usage instructions and a real bug (a `validationSplit` shuffling gotcha) worth knowing about if you extend this tool.
 
+## Firmware Architecture
+
+**Deviation from the PRD:** no TFLite Micro. Since training moved to a custom in-browser trainer (above) that exports raw float weight/bias arrays instead of a `.tflite` file, the firmware does inference by hand instead of via a TFLite Micro runtime.
+
+| Module | Files | Responsibility |
+| --- | --- | --- |
+| MPU6050 driver | `mpu6050.h/.cpp` | Raw I2C register reads (same approach as the Phase 4 data-forwarder sketch), scaled to match training data exactly |
+| Model inference | `model_inference.h/.cpp` | Hand-rolled `dense(450→16, ReLU) → dense(16→8, ReLU) → dense(8→5) → argmax` forward pass over `fall_detection_model_data.h` |
+| Neopixel driver | `neopixel_driver.h/.cpp` | `VisualState` enum; steady colors for standing/sitting/walking/dizzy, non-blocking pulse/fade animation for alarmed/recovering |
+| Buzzer driver | `buzzer_driver.h/.cpp` | `BuzzerState` enum; distinct non-blocking on/off beep *patterns* per state (this buzzer can't vary pitch — see Wiring section) |
+| State machine | `state_machine.h/.cpp` | NORMAL/DIZZY/ALARMED/RECOVERING transitions per the PRD, using string comparison against model labels (not hardcoded indices) |
+| Telegram | `telegram.h/.cpp` | HTTPS GET to the Bot API, non-blocking WiFi check, retries the fall alert automatically if WiFi wasn't ready on the first attempt |
+
+**Classification runs on a fresh, non-overlapping ~1.5s window per cycle**, not continuously — see [Known Limitations](#known-limitations) for why continuous classification made false alarms dramatically worse.
+
+**Confirmed working end-to-end**: a simulated fall correctly triggers the siren/red-pulse, sends a real Telegram alert, and (with the right sequence of readings) recovers back to normal.
+
+See `docs/TASKS.md` (Phase 5) for the full list of deviations and bugs found/fixed along the way (a linker "multiple definition" gotcha from the generated model header, the false-alarm classification-rate fix, and an open follow-up on the recovery-exit criteria interacting with real model behavior).
+
 ## Building & Flashing
 
 *(Filled in during Phase 6.)*
@@ -109,7 +128,8 @@ Full model header: [`include/fall_detection_model_data.h`](include/fall_detectio
 - **PlatformIO board ID:** `platformio.ini` uses `board = esp32s3usbotg`, which is PlatformIO's ID for Espressif's *official* ESP32-S3-USB-OTG devkit (LCD + 4 physical buttons). The actual hardware is a generic ESP32-S3-N16R8 dev board with none of that — confirmed by asking the chip directly via `esptool flash_id`: ESP32-S3, 16MB quad-I/O flash, 8MB quad PSRAM. This board ID was kept intentionally despite the mismatch; it builds and uploads fine, but its pin macros won't match this hardware, so **Phase 3 wiring will need pins set explicitly in `include/pins.h` rather than relying on board-default pin names**.
 - **Serial-over-USB gotcha:** this board has one native USB port (no separate CH340/CP2102 UART bridge), enumerating as `VID:PID=303A:1001`. Arduino's `Serial` doesn't route through that port by default — without `-DARDUINO_USB_CDC_ON_BOOT=1` in `build_flags`, `Serial.print()` silently goes to unused physical UART0 pins instead. This flag is now set in `platformio.ini` (added once `main.cpp` needed serial output for I2C bring-up testing).
 - **GitHub Issues/Projects granularity:** one GitHub Issue was created per phase (not per individual task) and attached to a matching milestone, so the [Project board](https://github.com/users/msohdy/projects/3) stays readable. `docs/TASKS.md` remains the source of truth for task-level detail — each phase issue links back to its section there.
-- **Secrets:** Telegram bot token/chat ID are currently saved locally in a git-ignored `.env` as personal notes. They'll move into a git-ignored `include/secrets.h` (with a `secrets.h.example` template committed) when Telegram integration is coded in Phase 5 — `.env` isn't read by the firmware.
+- **Secrets:** moved from the Phase 1 `.env` notes into a proper git-ignored `include/secrets.h` (with `secrets.h.example` committed as the template) in Phase 5. The `.env`'s saved "chat ID" turned out to actually be the `getUpdates` *lookup URL*, not the real numeric chat ID — had to message the bot and call that URL for real to get the actual ID.
+- **Telegram HTTPS uses `WiFiClientSecure::setInsecure()`** (no certificate pinning) — a common simplification for a hobbyist project, at the cost of no protection against a MITM on the local network. A future hardening pass could embed Telegram's root CA certificate instead.
 - **Deferred (by choice, not forgotten):** `CODEOWNERS`/PR-review notes and GitHub Discussions — both explicitly pushed to closer to Phase 7/8 when the project has outside contributors.
 - **Buzzer confirmed active** by direct test: connecting VCC to 3.3V and GND with the 3rd pin left unwired produced a steady, continuous tone — meaning it has its own internal driver circuit. This corrects an initial guess of "passive" based on an old sample sketch that used `tone()` with varying frequencies; that sketch apparently doesn't match this actual buzzer.
 - **Buzzer has no logic-level control pin at all** — its 3rd pin turned out to be unused (it buzzed with just VCC+GND wired). Control instead works by switching **power** to the buzzer: the wire originally planned for a fixed 3.3V rail goes to **GPIO6** instead, which sources power directly; GND stays on GND; the 3rd/mid pin is left disconnected. Confirmed working via `digitalWrite(GPIO6, HIGH/LOW)`. Since an active buzzer also can't vary pitch, the PRD's "distinct tone per state" requirement will need to become distinct on/off beep *patterns* instead (Phase 5). Driving the buzzer directly off a GPIO (no transistor) works for now but may need revisiting if current draw proves too high for the pin.

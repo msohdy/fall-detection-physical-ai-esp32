@@ -13,9 +13,21 @@ const uint32_t COLOR_CYAN = pixel.Color(0, 255, 255);   // sitting
 const uint32_t COLOR_GREEN = pixel.Color(0, 255, 0);    // walking
 const uint32_t COLOR_AMBER = pixel.Color(255, 191, 0);  // dizzy
 const uint32_t COLOR_RED = pixel.Color(255, 0, 0);      // alarmed
+const uint32_t COLOR_PURPLE = pixel.Color(160, 0, 255); // wifi-connected flash
 
 const unsigned long ALARM_PULSE_PERIOD_MS = 1000;
 const unsigned long RECOVER_FADE_DURATION_MS = 3000;
+
+// Purple flash x3 on WiFi connect -- non-blocking, overrides whatever
+// the current VisualState is drawing for less than a second, then
+// resumes it. Exists purely for field testing without a serial
+// monitor (see telegram.cpp's WiFi reconnect logic).
+bool flashing = false;
+int flashStep = 0;
+unsigned long flashStepStartMs = 0;
+const unsigned long FLASH_ON_MS = 150;
+const unsigned long FLASH_OFF_MS = 150;
+const int FLASH_STEPS = 6;  // 3x (on, off)
 
 uint8_t scaleChannel(uint8_t channel, float brightness) {
   return (uint8_t)(channel * brightness);
@@ -44,18 +56,11 @@ void showColor(uint32_t color) {
   pixel.show();
 }
 
-}  // namespace
-
-void neopixelInit() {
-  pixel.begin();
-  pixel.setBrightness(80);
-  neopixelSetState(VisualState::Standing);
-}
-
-void neopixelSetState(VisualState state) {
-  currentState = state;
-  stateStartMs = millis();
-
+// Draws the steady-state color for Standing/Sitting/Walking/Dizzy.
+// No-op for Alarmed/Recovering, which neopixelTick() animates instead.
+// Shared by neopixelSetState() and by the flash overlay above, which
+// needs to restore whatever was showing once it finishes.
+void drawSteadyColor(VisualState state) {
   switch (state) {
     case VisualState::Standing:
       showColor(COLOR_BLUE);
@@ -71,12 +76,47 @@ void neopixelSetState(VisualState state) {
       break;
     case VisualState::Alarmed:
     case VisualState::Recovering:
-      // First frame drawn by neopixelTick() below.
       break;
   }
 }
 
+}  // namespace
+
+void neopixelInit() {
+  pixel.begin();
+  pixel.setBrightness(80);
+  neopixelSetState(VisualState::Standing);
+}
+
+void neopixelSetState(VisualState state) {
+  currentState = state;
+  stateStartMs = millis();
+  drawSteadyColor(state);  // no-op for Alarmed/Recovering -- neopixelTick() draws their first frame
+}
+
+void neopixelFlashWifiConnected() {
+  flashing = true;
+  flashStep = 0;
+  flashStepStartMs = millis();
+}
+
 void neopixelTick() {
+  if (flashing) {
+    unsigned long stepDuration = (flashStep % 2 == 0) ? FLASH_ON_MS : FLASH_OFF_MS;
+    if (millis() - flashStepStartMs >= stepDuration) {
+      flashStep++;
+      flashStepStartMs = millis();
+      if (flashStep >= FLASH_STEPS) {
+        flashing = false;
+        drawSteadyColor(currentState);  // restore immediately -- animated states redraw themselves below anyway
+      }
+    }
+    if (flashing) {
+      showColor(flashStep % 2 == 0 ? COLOR_PURPLE : pixel.Color(0, 0, 0));
+      return;
+    }
+  }
+
   unsigned long elapsed = millis() - stateStartMs;
 
   if (currentState == VisualState::Alarmed) {

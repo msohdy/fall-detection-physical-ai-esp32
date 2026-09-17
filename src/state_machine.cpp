@@ -3,6 +3,7 @@
 #include "neopixel_driver.h"
 #include "buzzer_driver.h"
 #include "telegram.h"
+#include <Arduino.h>
 #include <string.h>
 
 namespace {
@@ -10,13 +11,14 @@ namespace {
 enum class AppState {
   Normal,
   Dizzy,
-  Alarmed,
+  Fallen,      // fall detected, short debounce before confirming -- always leads to ALARMED
+  Alarmed,     // confirmed fall: alert sent, siren active
   Recovering,
 };
 
 AppState state = AppState::Normal;
 int confirmCounter = 0;
-bool alertSent = false;
+unsigned long fallStartMs = 0;
 
 // Sustained-reading thresholds, counted in classifications (one per
 // ~1.5s window -- see main.cpp's non-overlapping-window classification
@@ -25,6 +27,25 @@ bool alertSent = false;
 const int CONFIRM_THRESHOLD = 3;           // ~4.5s sustained before ALARMED -> RECOVERING
 const int RECOVER_CONFIRM_THRESHOLD = 5;   // ~7.5s sustained before RECOVERING -> NORMAL
 
+// Debounce after a fall before confirming and alerting. Explicit
+// product decision: the alert must always fire once a fall is
+// confirmed, never conditionally on whether the person seems to
+// recover -- missing a real fall is worse than an extra alert. (An
+// earlier design waited up to 20s to decide whether to alert at all;
+// that's been dropped for exactly this reason.) Recovery afterward
+// (stopping the siren, sending the resolved message) can still happen
+// at any time via ALARMED -> RECOVERING below -- it just no longer
+// prevents the alert itself.
+//
+// Briefly shrunk to ~1.5s (one classification cycle) to cut end-to-end
+// alert latency, but restored to 4s once the real cause of the
+// perceived "10+ second" latency was found and fixed: the Telegram
+// send was blocking the main sensor/classification loop directly (see
+// telegram.cpp's background task). With that fixed, there's no reason
+// to trade away debounce margin against a single noisy frame for
+// speed the debounce wasn't actually costing.
+const unsigned long FALL_CONFIRM_DELAY_MS = 4000;
+
 bool isLabel(int classIndex, const char* name) {
   return strcmp(modelLabel(classIndex), name) == 0;
 }
@@ -32,13 +53,24 @@ bool isFall(int c) { return isLabel(c, "fall"); }
 bool isDizzy(int c) { return isLabel(c, "dizzy"); }
 bool isNormalMotion(int c) { return isLabel(c, "stand") || isLabel(c, "sit") || isLabel(c, "walk"); }
 
-// What counts as "recovering" right after a fall (exiting ALARMED),
-// per an explicit choice to require stand/dizzy/walk specifically --
-// NOT sit. Any sign of movement/consciousness other than sitting
-// still counts; a continued "fall" or "sit" reading keeps the siren
-// going. Deliberately narrower than isNormalMotion() above, which is
-// still used for Dizzy -> Normal and Recovering -> Normal.
-bool isRecoverySign(int c) { return isLabel(c, "stand") || isDizzy(c) || isLabel(c, "walk"); }
+// What counts as "recovering" right after a fall (exiting ALARMED):
+// any non-fall reading -- stand, sit, walk, or dizzy. This used to
+// deliberately exclude "sit" (only stand/dizzy/walk counted), on the
+// theory that sitting still wasn't a clean enough sign of recovery.
+// In practice the model classifies a lot of real post-fall standing
+// and walking as "sit," so excluding it left the alarm stuck
+// indefinitely -- confirmed during real testing. Now that alerting no
+// longer depends on recovery detection (see FALL_CONFIRM_DELAY_MS
+// above), there's no safety downside to being lenient here: worst case
+// is stopping the siren a bit early, not missing an alert.
+bool isRecoverySign(int c) { return isNormalMotion(c) || isDizzy(c); }
+
+// Debug-only: makes state transitions and Telegram send results
+// visible over serial, since Phase 6 bring-up needs to see these to
+// diagnose alert-delivery issues rather than guessing from behavior.
+void logTransition(const char* from, const char* to, int predicted) {
+  Serial.printf("[state] %s -> %s (predicted=%s)\n", from, to, modelLabel(predicted));
+}
 
 // Standing/Sitting/Walking are steady (non-animated) colors, so
 // calling this every tick while remaining in NORMAL is harmless --
@@ -49,12 +81,25 @@ void updateNeopixelForNormal(int c) {
   else if (isLabel(c, "walk")) neopixelSetState(VisualState::Walking);
 }
 
-void enterAlarmed() {
-  state = AppState::Alarmed;
+void enterFallen(int predicted) {
+  logTransition(state == AppState::Normal ? "NORMAL" : "DIZZY", "FALLEN", predicted);
+  state = AppState::Fallen;
   neopixelSetState(VisualState::Alarmed);
   buzzerSetState(BuzzerState::Siren);
-  alertSent = false;
+  fallStartMs = millis();
   confirmCounter = 0;
+}
+
+// Confirmed: either FALL_CONFIRM_DELAY_MS elapsed after a fall, or a
+// relapse straight from RECOVERING (a fall after we already thought
+// they were recovering re-alerts immediately, skipping the debounce).
+void enterAlarmed(int predicted) {
+  logTransition(state == AppState::Recovering ? "RECOVERING" : "FALLEN", "ALARMED", predicted);
+  state = AppState::Alarmed;
+  neopixelSetState(VisualState::Alarmed);
+  buzzerSetState(BuzzerState::SirenConfirmed);
+  confirmCounter = 0;
+  telegramSendFallAlert();  // fire-and-forget -- the telegram task owns retry/delivery from here
 }
 
 }  // namespace
@@ -62,7 +107,6 @@ void enterAlarmed() {
 void stateMachineInit() {
   state = AppState::Normal;
   confirmCounter = 0;
-  alertSent = false;
   neopixelSetState(VisualState::Standing);
   buzzerSetState(BuzzerState::Silent);
 }
@@ -72,7 +116,7 @@ void stateMachineUpdate(int predicted) {
     case AppState::Normal:
       updateNeopixelForNormal(predicted);
       if (isFall(predicted)) {
-        enterAlarmed();
+        enterFallen(predicted);
       } else if (isDizzy(predicted)) {
         state = AppState::Dizzy;
         neopixelSetState(VisualState::Dizzy);
@@ -82,7 +126,7 @@ void stateMachineUpdate(int predicted) {
 
     case AppState::Dizzy:
       if (isFall(predicted)) {
-        enterAlarmed();
+        enterFallen(predicted);
       } else if (isNormalMotion(predicted)) {
         state = AppState::Normal;
         updateNeopixelForNormal(predicted);
@@ -90,23 +134,31 @@ void stateMachineUpdate(int predicted) {
       }
       break;
 
-    case AppState::Alarmed:
-      if (!alertSent) {
-        // Only mark as sent if it actually went through -- if WiFi
-        // isn't connected yet, this naturally retries on the next
-        // classification instead of silently giving up.
-        alertSent = sendTelegramMessage("Fall detected. Siren active.");
+    case AppState::Fallen:
+      // fallStartMs is set once, in enterFallen(), and deliberately
+      // never reset here even on repeated "fall" readings -- a real
+      // fall's settling motion can span several classification windows
+      // in a row, and restarting the clock on each one let a single
+      // continuous fall stretch the debounce out to 15-20+ seconds
+      // (observed during testing). Escalation must happen within a
+      // fixed ~4-5s of the *first* fall reading, full stop.
+      if (millis() - fallStartMs >= FALL_CONFIRM_DELAY_MS) {
+        enterAlarmed(predicted);
       }
+      break;
+
+    case AppState::Alarmed:
       if (isRecoverySign(predicted)) {
         confirmCounter++;
         if (confirmCounter >= CONFIRM_THRESHOLD) {
+          logTransition("ALARMED", "RECOVERING", predicted);
           state = AppState::Recovering;
           neopixelSetState(VisualState::Recovering);
           buzzerSetState(BuzzerState::Recovery);
           confirmCounter = 0;
         }
       } else {
-        confirmCounter = 0;  // any wobble (including "sit") resets -- must be a clean, sustained recovery
+        confirmCounter = 0;  // only a continued "fall" reading resets -- must be a clean, sustained recovery
       }
       break;
 
@@ -114,14 +166,15 @@ void stateMachineUpdate(int predicted) {
       if (isNormalMotion(predicted)) {
         confirmCounter++;
         if (confirmCounter >= RECOVER_CONFIRM_THRESHOLD) {
+          logTransition("RECOVERING", "NORMAL", predicted);
           state = AppState::Normal;
           confirmCounter = 0;
           updateNeopixelForNormal(predicted);
           buzzerSetState(BuzzerState::Silent);
-          sendTelegramMessage("Resolved: back to normal activity.");
+          telegramSendResolved();  // fire-and-forget -- the telegram task owns retry/delivery from here
         }
       } else if (isFall(predicted)) {
-        enterAlarmed();  // relapse -- resets alertSent so a fresh alert goes out
+        enterAlarmed(predicted);  // relapse -- re-alerts (fire-and-forget, may already be pending from before)
       } else {
         confirmCounter = 0;
       }

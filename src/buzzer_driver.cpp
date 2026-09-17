@@ -65,6 +65,9 @@ void buzzerTick() {
     case BuzzerState::Siren:
       applyPattern(SIREN_PATTERN, 2, elapsed);
       break;
+    case BuzzerState::SirenConfirmed:
+      digitalWrite(PIN_BUZZER, HIGH);  // continuous tone, no pattern
+      break;
     case BuzzerState::Recovery:
       applyPattern(RECOVERY_PATTERN, 6, elapsed);
       break;

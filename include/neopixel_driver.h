@@ -26,4 +26,10 @@ void neopixelSetState(VisualState state);
 // (non-blocking).
 void neopixelTick();
 
+// One-shot: flashes purple 3 times (non-blocking, ticked via
+// neopixelTick() like everything else), then resumes whatever the
+// current VisualState should be showing. Call whenever WiFi connects,
+// so field testing without a serial monitor has a visible signal.
+void neopixelFlashWifiConnected();
+
 #endif  // NEOPIXEL_DRIVER_H

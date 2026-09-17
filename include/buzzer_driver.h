@@ -9,9 +9,10 @@
 
 enum class BuzzerState {
   Silent,
-  Warning,    // dizzy: slow, intermittent beep
-  Siren,      // alarmed: fast, continuous-feeling beeping
-  Recovery,   // recovering: three short beeps, then a pause, repeating
+  Warning,        // dizzy: slow, intermittent beep
+  Siren,          // fallen, awaiting recovery confirmation: fast intermittent beeping
+  SirenConfirmed, // confirmed no recovery within the grace period: continuous tone
+  Recovery,       // recovering: three short beeps, then a pause, repeating
 };
 
 void buzzerInit();

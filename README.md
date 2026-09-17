@@ -2,7 +2,7 @@
 
 An ESP32-S3 wearable/room device that classifies body state (standing, sitting, walking, dizzy, fall) from MPU6050 motion data using an on-device TinyML model, gives silent per-state Neopixel feedback, sounds a buzzer for concerning states, and sends a Telegram alert to an emergency contact when a fall is confirmed.
 
-**Status:** Phase 6 — Build, Flash & Upload
+**Status:** Phase 6 complete — Phase 7: Testing & Validation in progress. (Phase 6 closed with one small item carried forward: a clean final untethered/battery confirmation run, folded into Phase 7's checklist.)
 
 > This README is being filled in phase by phase as the project is built — see `CLAUDE.md` and `docs/TASKS.md`. Sections below will fill in as each phase completes.
 
@@ -10,11 +10,41 @@ An ESP32-S3 wearable/room device that classifies body state (standing, sitting, 
 
 ## Overview
 
-*(Problem, goals, and non-goals — filled in from `docs/Fall_Detection_PRD.md`.)*
+**Problem.** A person living or working alone has no automatic way to signal a fall. Manual alerting (pressing a button, calling out) fails exactly when someone is unconscious or too disoriented to act.
+
+**Goals**
+
+- Classify body state in real time from IMU data: standing, sitting, walking, dizzy, fall.
+- Give silent, glanceable feedback (Neopixel color) for every state, so the device isn't alarming during normal activity.
+- Escalate audibly only for concerning states (dizzy, fall) — a caregiver should be able to tell severity apart by sound alone.
+- On a confirmed fall, notify a remote emergency contact over Telegram without requiring the fallen person to act.
+- Require a sustained, confirmed signal before silencing an alarm, to avoid false-clears from a momentary misread.
+
+**Non-goals (v1)**
+
+- No health diagnosis or vital-sign monitoring — the device infers activity state from motion only.
+- No GPS/location in the alert (device is assumed stationary within one home/room).
+- No two-way voice or video in the alert — the Telegram message is informational, not a call.
+
+**How the built system differs from the original PRD** (full detail in [Firmware Architecture](#firmware-architecture), [Known Limitations](#known-limitations), and `docs/TASKS.md`):
+
+- No TFLite Micro — inference is a hand-rolled forward pass over a custom-trained dense network (Edge Impulse was dropped entirely; see [Training the Model](#training-the-model)).
+- Fall confirmation and alerting is a `FALLEN` → `ALARMED` debounce-then-always-alert design, not the PRD's single-frame trigger — a deliberate product decision made during Phase 6 testing, prioritizing "never suppress a real alert" over "never send an extra one."
+- v1 is a handheld breadboard prototype (powered by a USB powerbank), not the wearable or room-mounted form factor the PRD assumed — see [Bill of Materials](#bill-of-materials) and the Wiring section's form-factor note.
+- "Zero missed falls" is not yet fully met by the trained model (~11.2% of fall samples still confused with "dizzy") — see [Known Limitations](#known-limitations).
 
 ## Bill of Materials
 
-*(Filled in during Phase 1/3 — components and where to get them.)*
+- **ESP32-S3 dev board** — generic ESP32-S3-N16R8 board (16MB flash, 8MB PSRAM). Runs the classifier, state machine, and WiFi/Telegram calls. *Not* the official ESP32-S3-USB-OTG devkit that `platformio.ini`'s board ID technically names — see [Build Log](#build-log--decisions).
+- **MPU6050 breakout** — standard I²C accelerometer+gyroscope module. Primary sensor, feeds the windowed IMU data the classifier reads.
+- **Neopixel LED** — the board's onboard single WS2812 RGB LED (GPIO48), no external strip used. Silent per-state color feedback.
+- **Buzzer** — a 3-pin module that turned out to be **active** with no usable signal pin (see [Wiring](#wiring)), controlled by switching its power via GPIO6. Audible escalation for dizzy/fall states.
+- **Power source (v1)** — USB powerbank. Portable power for the handheld breadboard prototype.
+- **Breadboard + jumper wires** — standard prototyping breadboard, no PCB in v1.
+
+**Not used in this project** (per the original PRD, reserved for a different/future project): camera, DHT11, IR sensor, ultrasonic sensor, fan/relay, servo motor.
+
+*Specific vendor links aren't included yet — these are generic, widely available parts. Sourcing links can be added here later if useful for reproducing the exact build.*
 
 ## Wiring
 
@@ -41,8 +71,6 @@ The Neopixel is the board's onboard single WS2812 RGB LED, not an external strip
 
 **Form factor (v1):** breadboard prototype, powered by a USB powerbank — handheld, not worn or room-mounted. No enclosure/form-factor commitment yet; strain relief and wearable-specific concerns are out of scope until a final form factor is chosen.
 
-*(Wiring diagram export and breadboard photos to be added here once produced.)*
-
 ## Setup
 
 **Firmware toolchain:** [PlatformIO](https://platformio.org/) as a VS Code extension.
@@ -50,6 +78,15 @@ The Neopixel is the board's onboard single WS2812 RGB LED, not an external strip
 - Board: `esp32s3usbotg` in `platformio.ini` (PlatformIO's board ID for Espressif's official ESP32-S3-USB-OTG devkit). The actual hardware is a generic ESP32-S3-N16R8 dev board (confirmed via `esptool flash_id`: ESP32-S3, 16MB quad-I/O flash, 8MB quad PSRAM) — see [Build Log / Decisions](#build-log--decisions).
 - Framework: `arduino`
 - Confirmed: project builds and uploads over USB (native USB port, shows up as `VID:PID=303A:1001`).
+
+**Before building, set up your own credentials** (the repo never contains real ones):
+
+1. Copy [`include/secrets.h.example`](include/secrets.h.example) to `include/secrets.h` (git-ignored — never commit this file).
+2. Fill in `WIFI_SSID` / `WIFI_PASSWORD` for the network the device should join. Note: the ESP32-S3 is **2.4GHz WiFi only** — if using a phone hotspot, make sure it's not set to 5GHz-only (see [Known Limitations](#known-limitations)).
+3. Create a Telegram bot via [@BotFather](https://t.me/BotFather) and copy its token into `TELEGRAM_BOT_TOKEN`.
+4. Message your new bot once (anything), then visit `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates` in a browser and copy the numeric `"chat":{"id": ...}` value into `TELEGRAM_CHAT_ID` — not the lookup URL itself, the actual number.
+
+Then build and flash — see [Building & Flashing](#building--flashing) below.
 
 ## Data Collection Tooling
 
@@ -96,22 +133,42 @@ Full model header: [`include/fall_detection_model_data.h`](include/fall_detectio
 | Model inference | `model_inference.h/.cpp` | Hand-rolled `dense(450→16, ReLU) → dense(16→8, ReLU) → dense(8→5) → argmax` forward pass over `fall_detection_model_data.h` |
 | Neopixel driver | `neopixel_driver.h/.cpp` | `VisualState` enum; steady colors for standing/sitting/walking/dizzy, non-blocking pulse/fade animation for alarmed/recovering |
 | Buzzer driver | `buzzer_driver.h/.cpp` | `BuzzerState` enum; distinct non-blocking on/off beep *patterns* per state (this buzzer can't vary pitch — see Wiring section) |
-| State machine | `state_machine.h/.cpp` | NORMAL/DIZZY/ALARMED/RECOVERING transitions per the PRD, using string comparison against model labels (not hardcoded indices) |
-| Telegram | `telegram.h/.cpp` | HTTPS GET to the Bot API, non-blocking WiFi check, retries the fall alert automatically if WiFi wasn't ready on the first attempt |
+| State machine | `state_machine.h/.cpp` | NORMAL/DIZZY/FALLEN/ALARMED/RECOVERING transitions, using string comparison against model labels (not hardcoded indices) |
+| Telegram | `telegram.h/.cpp` | HTTPS GET to the Bot API, run entirely on its own FreeRTOS task (see below) so a slow/retrying send can never stall sensor sampling or classification |
 
 **Classification runs on a fresh, non-overlapping ~1.5s window per cycle**, not continuously — see [Known Limitations](#known-limitations) for why continuous classification made false alarms dramatically worse.
 
-**Confirmed working end-to-end**: a simulated fall correctly triggers the siren/red-pulse, sends a real Telegram alert, and (with the right sequence of readings) recovers back to normal.
+**Fall confirmation and alerting (deviation from the original single-fall-triggers-alert design, decided during Phase 6 testing):** a fall reading enters a `FALLEN` state with a short ~4s debounce (filters a single noisy frame, nothing more; the timer is set once on the first fall reading and never reset, so it can't stretch out on a prolonged settling motion), after which the Telegram alert **always** fires — never conditionally on whether the person seems to be recovering. An earlier version waited up to 20 seconds to decide whether to alert at all, canceling quietly if the person got up in time; this was built, tested, and rejected: missing a real fall is worse than an occasional extra alert. Recovery is fully decoupled from the alert and has no time limit — after `ALARMED`, sustained non-fall readings (stand, sit, walk, or dizzy — "sit" was excluded until Phase 6 field testing showed the model classifies a lot of real post-fall movement as "sit," which left the alarm stuck) move to `RECOVERING` then `NORMAL` and send a "Resolved" message. The buzzer escalates from an intermittent siren during the debounce to a continuous tone once confirmed.
 
-See `docs/TASKS.md` (Phase 5) for the full list of deviations and bugs found/fixed along the way (a linker "multiple definition" gotcha from the generated model header, the false-alarm classification-rate fix, and an open follow-up on the recovery-exit criteria interacting with real model behavior).
+**Telegram sending runs on its own FreeRTOS task** (`xTaskCreatePinnedToCore`, pinned to core 0, separate from Arduino's `loop()` on core 1), not inline in the state machine. `state_machine.cpp` only calls fire-and-forget `telegramSendFallAlert()`/`telegramSendResolved()`; the background task owns all retry/backoff/delivery. This was a real bug fix, not just cleanup: the blocking HTTPS/TLS call was originally invoked directly from `stateMachineUpdate()`, so while a send was in flight (which can take seconds, especially retrying on a flaky connection) the *entire main loop froze* — no new IMU samples, no new classifications, frozen animations — which looked exactly like the state machine being "stuck," because it genuinely was. Message delivery also persists across state transitions: a pending alert keeps retrying until it actually succeeds no matter what the state machine does in the meantime (e.g. a quick recovery before WiFi reconnects no longer silently drops the alert).
+
+**Confirmed working end-to-end on real hardware, twice in a row (once before the async-task fix, once after)**: fall → alert sent → recovered → resolved message sent → second fall → alert sent again, with real Telegram messages received on a phone every time, and — after the async fix — the classification heartbeat confirmed never skipping a beat even while a send was actively in flight or retrying.
+
+See `docs/TASKS.md` (Phase 5 and Phase 6) for the full list of deviations and bugs found/fixed along the way — a linker "multiple definition" gotcha from the generated model header, the false-alarm classification-rate fix, a build-blocking typo in `secrets.h`, a WiFi-silently-drops-and-never-reconnects bug, a WiFi reconnect throttle fighting itself, a router-side rate-limit block, a phone hotspot's 5GHz band being invisible to the 2.4GHz-only ESP32-S3, a `secrets.h` edit not triggering a relink, and the fall-confirmation/async-task fixes above.
 
 ## Building & Flashing
 
-*(Filled in during Phase 6.)*
+**Toolchain:** PlatformIO. Platform `espressif32 @ 7.0.1`, `framework-arduinoespressif32 @ 3.20017.241212+sha.dcc1105b`, `tool-esptoolpy @ 4.11.0`, board `esp32s3usbotg`.
+
+```bash
+pio run                                    # compile
+pio device list                            # find the serial port
+pio run --target upload --upload-port <port>
+pio device monitor --port <port> --baud 115200
+```
+
+**Gotcha — this board does not auto-reset into the bootloader.** `pio run --target upload` fails with `A fatal error occurred: Failed to connect to ESP32-S3: No serial data received.` unless you manually enter bootloader mode first: hold **BOOT**, then press-and-release **RESET** (or unplug/replug USB) while still holding BOOT. The board re-enumerates under a **different port** while in bootloader mode (e.g. `/dev/cu.usbmodem101` instead of `/dev/cu.usbmodem30EDA0A8ADE01`), showing as "USB JTAG/serial debug unit" instead of "Espressif ESP32-S3-USB-OTG" — upload to that port. It hard-resets back to the original port/name automatically once the upload finishes.
+
+No serial output existed at all before Phase 6 bring-up — `main.cpp`, `state_machine.cpp`, and `telegram.cpp` now log a per-cycle `[cycle] predicted=<label> wifi=<connected|disconnected>` heartbeat plus `[state]`/`[wifi]`/`[telegram]` transition and send-result lines, which is what made the WiFi/Telegram bugs above diagnosable instead of guessed at.
 
 ## Testing & Validation
 
-*(Filled in during Phase 7 — results against the PRD's success criteria.)*
+*(Full writeup pending — Phase 7 in progress. Two results already in from Phase 6's bug-fixing work:)*
+
+- **WiFi-down path:** confirmed the local alarm (Neopixel + siren) fires regardless of WiFi state, and the classification loop never stalls while WiFi is down or a Telegram send is actively in flight/retrying (verified once Telegram sending moved to its own FreeRTOS task — see [Firmware Architecture](#firmware-architecture)).
+- **Relapse path:** observed live (`RECOVERING -> ALARMED` on a fresh fall reading), with a fresh alert sent successfully.
+
+Still open: classifier accuracy re-check on-device, end-to-end latency logged across multiple trials, systematic zero-missed-falls testing, recovery false-clear resistance, and a final clean untethered confirmation run (carried over from Phase 6). See `docs/TASKS.md` Phase 7 for the full checklist.
 
 ## Known Limitations
 
@@ -119,6 +176,8 @@ See `docs/TASKS.md` (Phase 5) for the full list of deviations and bugs found/fix
 
 - **Fall detection does not fully meet "zero missed falls" yet.** The trained model misses ~11.2% of fall validation samples (23/205), almost all confused with "dizzy." This is very likely tied to the handheld (not worn) form factor — a real fall experienced by a worn device has a sharper acceleration/rotation signature than a handheld mimicked fall motion, making "fall" and "dizzy" genuinely harder to tell apart in this dataset. Revisit with a wearable form factor and/or more/cleaner fall data.
 - **Occasional false alarms are expected, by design trade-off.** The model also has a small non-fall→fall misclassification rate (~1.2%, mostly dizzy→fall). Firmware classifies once per ~1.5s window (not continuously), which keeps this down to roughly one false alarm every couple of minutes at rest — acceptable per the PRD's explicit priority (missed falls matter more than false positives), but worth knowing before real-world deployment. See Phase 5 notes in `docs/TASKS.md` for the math on why continuous (sliding-window) classification made this dramatically worse and was reverted.
+- **The 4-second fall-confirmation debounce doesn't fix the model's fall↔dizzy confusion above, but it does mean the alert no longer depends on correctly detecting recovery.** Earlier in Phase 6, the alert was briefly designed to wait and see whether the person recovered before deciding whether to alert at all — that approach would have compounded the model's known weaknesses into missed alerts. The current design alerts unconditionally on a confirmed fall, so those model/recovery-detection issues can no longer suppress a real alert — only delay the unrelated "Resolved" message.
+- **WiFi connect time is inconsistent and occasionally very slow (observed anywhere from ~5s to 90+s) after a cold boot.** Root cause not fully pinned down — likely a mix of normal WPA2/DHCP variance and, in a couple of cases, a router-side anti-flood block triggered by an earlier firmware bug's overly aggressive reconnect attempts (since fixed). Message delivery is resilient to this regardless (it retries indefinitely, independent of the state machine), but a very slow connect does mean a longer real-world delay before the alert actually reaches a phone. Worth further investigation if it recurs without an obvious cause.
 
 ## Build Log / Decisions
 
@@ -139,6 +198,20 @@ See `docs/TASKS.md` (Phase 5) for the full list of deviations and bugs found/fix
 - **Window size tuned from 5 to 75 samples** after discovering the initial default (100ms at 50Hz) was far too short to characterize a fall's shape, causing heavy confusion with "dizzy." See [Training the Model](#training-the-model) for the full tuning table and the resulting known limitation.
 - **Generated model header must only be included from one `.cpp` file.** `fall_detection_model_data.h` defines `LABELS[]` and the weight/bias arrays without `extern`, so including it from more than one file causes a linker "multiple definition" error (and would otherwise silently duplicate ~160KB of flash per file that includes it). Firmware confines it to `src/model_inference.cpp`; everything else goes through `model_inference.h`, which mirrors the model's dimension macros with a `static_assert` guard so a future retrain with different dimensions fails the build instead of silently misbehaving.
 - **Classification runs on a fresh window per cycle, not a continuous sliding window.** An early firmware version classified on every new IMU sample (~50Hz sliding window) for lower latency, but combined with the model's small non-fall→fall misclassification rate (~1.2%, mostly dizzy→fall), that compounded into false ALARMED triggers roughly every few seconds even at rest. Reverted to a fresh, non-overlapping window per classification (~0.67/sec) — this also matches how the model was actually validated (independent windows) — bringing false alarms down to roughly once every couple of minutes. See [Known Limitations](#known-limitations).
+- **Found and fixed a build-blocking typo in `secrets.h`**: `TELEGRAM_CHAT_ID` was missing its closing quote (`"529206226` with no trailing `"`), a silent syntax error that broke every build until caught during Phase 6 bring-up. Unrelated to firmware logic — just a typo — but a reminder to actually run `pio run` after any manual edit to `secrets.h`, since it's git-ignored and never reviewed in a diff.
+- **Real bug: WiFi silently drops and never reconnects on its own, which was the actual cause of "a second fall's Telegram alert never sends."** Live testing showed a first fall alert send fine, then a second fall right after produce no alert at all with no visible error. Root cause (found only after adding serial logging that hadn't existed before): WiFi disconnected and stayed disconnected for 25+ seconds with zero recovery attempts, despite `WiFi.setAutoReconnect(true)`. Fixed with `WiFi.setSleep(false)` (disables ESP32 modem sleep, a known cause of exactly this) plus an active, throttled reconnect loop (`telegramTick()` in `telegram.cpp`, retrying `WiFi.begin()` at most once per 5s) called every ~20ms from the main sampling loop. Confirmed fixed end-to-end: two falls in a row now both alert successfully.
+- **Real bug: repeated failed Telegram sends risked hanging the device.** One test showed a failed send followed by the serial heartbeat itself going silent — consistent with a second back-to-back TLS handshake (a fresh `WiFiClientSecure`/`HTTPClient` per attempt) hanging rather than failing fast. Fixed by throttling retry attempts to at most once per 5 seconds instead of every ~1.5s classification cycle.
+- **State machine redesigned around a "did they get up" question — a product decision made mid-Phase-6 testing, deviation from the original single-fall-triggers-alert design.** A fall now enters a `FALLEN` state with a short ~4-second debounce (filters a single noisy frame, nothing more) before confirming. **The Telegram alert always fires once a fall is confirmed — never conditionally on whether the person seems to recover.** An earlier version of this redesign waited up to 20 seconds to decide whether to alert at all, canceling quietly (no message ever sent) if the person got up in time; this was built, tested, and explicitly rejected, since missing a real fall is worse than an occasional extra alert, and gating the alert on the same recovery-detection logic that already had a known bug (the ALARMED→RECOVERING "sit exclusion" issue noted in Phase 5) was too risky. Recovery afterward is unchanged and unlimited in time: sustained stand/dizzy/walk readings move ALARMED → RECOVERING → NORMAL and send the "Resolved" message.
+- **This board does not auto-reset into the bootloader.** Every upload requires manually holding BOOT and pressing/releasing RESET (or unplugging/replugging USB) first — esptool's normal auto-reset sequence fails with "No serial data received" otherwise. See [Building & Flashing](#building--flashing).
+- **Real bug: a pending alert could be silently abandoned if the state moved on before WiFi came up.** The retry logic originally lived inside the `ALARMED` switch case, so if the person recovered before WiFi ever reconnected, the send attempts just stopped — not delayed, lost. Found via a power-bank test where WiFi took 20-35s to reconnect after a cold boot. Fixed by hoisting message delivery out of the state switch entirely: a pending alert or resolved message now retries every cycle regardless of `AppState`, until it actually succeeds.
+- **Real bug: the fall-confirmation debounce could stretch to 15-20+ seconds instead of ~4s.** The debounce timer restarted on every repeated "fall" classification (meant for a genuine relapse), but a single real fall's settling motion can span several classification windows in a row, each one pushing the timer further out. Fixed by setting the timer once on the first fall reading and never resetting it within the same episode.
+- **Real bug: WiFi's own reconnect logic was fighting itself, stretching a normal ~5-10s connect out to 60-90+ seconds.** Calling `WiFi.begin()` again every 5s while disconnected can abort and restart an in-progress handshake before it finishes. Fixed by raising the throttle to 15s.
+- **Discovered, not a firmware bug: a home router can temporarily rate-limit/block a device that reassociates too aggressively.** Hit this after the bug above had been live for a while — WiFi stopped connecting entirely, then started working again after enough time passed. Likely a router-side anti-flood defense. Not fixable from firmware; power-cycling the router or waiting it out cleared it.
+- **Discovered, not a firmware bug: a phone hotspot can default to 5GHz, invisible to the ESP32-S3's 2.4GHz-only radio.** Worth checking a hotspot's band/"maximize compatibility" setting before assuming a connectivity issue is a firmware bug.
+- **Real build-tooling gotcha: editing `secrets.h` doesn't always trigger PlatformIO to relink.** Changing `WIFI_SSID`/`WIFI_PASSWORD` caused `telegram.cpp.o` to recompile (correct, by timestamp) but the final `firmware.bin` was not relinked, confirmed by `strings`-searching the built binary for the expected SSID. A board flashed after an edit like this can silently keep running old credentials. Run `pio run --target clean` before rebuilding whenever a git-ignored header like `secrets.h` changes, or verify with `strings .pio/build/*/firmware.bin | grep <expected-value>` if in doubt.
+- **Real bug (the actual root cause of "stuck" states and the multi-second alert delay): the Telegram send blocked the entire main loop.** See [Firmware Architecture](#firmware-architecture) above for the full explanation and fix (moving Telegram sending to its own FreeRTOS task).
+- **Recovery criteria broadened to include "sit"** in `isRecoverySign()` (now "any non-fall reading"), reverting the Phase 5 exclusion that caused the ALARMED-stuck bug. Safe now that alerting no longer depends on recovery detection succeeding.
+- **Added a purple-flash-x3 Neopixel indicator on WiFi connect**, non-blocking, so WiFi status is visible during untethered/battery field testing without a serial monitor attached.
 
 ## License
 

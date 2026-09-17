@@ -5,6 +5,7 @@
 #include "buzzer_driver.h"
 #include "state_machine.h"
 #include "telegram.h"
+#include <WiFi.h>
 
 // Main firmware loop. Keeps the loop itself thin per the PRD: sample,
 // classify, tick the state machine and drivers.
@@ -43,9 +44,25 @@ void loop() {
     mpu6050ReadSample(&window[i * MODEL_SENSOR_CHANNELS]);
     neopixelTick();
     buzzerTick();
+    telegramTick();
     delay(20);  // ~50Hz, matches training data rate
   }
 
   int predicted = modelPredict(window);
+  Serial.printf("[cycle] predicted=%s wifi=%s\n", modelLabel(predicted),
+                WiFi.status() == WL_CONNECTED ? "connected" : "disconnected");
   stateMachineUpdate(predicted);
+
+  // One-shot WiFi connect/drop logging -- lets the serial monitor show
+  // exactly when the link comes up or disappears, instead of only
+  // inferring it indirectly from Telegram send failures.
+  static bool wasConnected = false;
+  bool isConnected = WiFi.status() == WL_CONNECTED;
+  if (isConnected && !wasConnected) {
+    Serial.printf("[wifi] connected, IP=%s\n", WiFi.localIP().toString().c_str());
+    neopixelFlashWifiConnected();  // purple x3 -- visible without a serial monitor
+  } else if (!isConnected && wasConnected) {
+    Serial.println("[wifi] connection lost");
+  }
+  wasConnected = isConnected;
 }

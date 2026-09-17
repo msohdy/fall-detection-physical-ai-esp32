@@ -1,61 +1,49 @@
 #include <Arduino.h>
+#include "mpu6050.h"
+#include "model_inference.h"
 #include "neopixel_driver.h"
 #include "buzzer_driver.h"
+#include "state_machine.h"
 
-// Phase 5 bring-up test: cycles through every visual/buzzer state
-// every 4 seconds so each color and beep pattern can be confirmed by
-// eye/ear. Not the final firmware -- see the state machine below.
+// Main firmware loop. Keeps the loop itself thin per the PRD: sample,
+// classify, tick the state machine and drivers.
+//
+// Classifies on a fresh, non-overlapping window each cycle (not a
+// sliding window updated every sample) -- this matches how the model
+// was actually validated (independent windows, not overlapping ones)
+// and keeps the classification rate low enough that the model's
+// measured ~1.2% false-fall-classification rate doesn't compound into
+// frequent false alarms. An earlier sliding-window version classified
+// on every new sample (50Hz), and the resulting ~50x higher
+// classification rate caused spurious ALARMED triggers roughly every
+// few seconds even at rest -- see docs/TASKS.md (Phase 5) for the math.
 
-unsigned long lastSwitchMs = 0;
-int stateIndex = 0;
-const unsigned long SWITCH_INTERVAL_MS = 4000;
+float window[MODEL_INPUT_FEATURES];
 
 void setup() {
   Serial.begin(115200);
   delay(1000);
+
+  mpu6050Init();
   neopixelInit();
   buzzerInit();
-  Serial.println("Neopixel + buzzer bring-up test");
+  stateMachineInit();
+
+  Serial.println("Fall Detection System starting.");
 }
 
 void loop() {
-  neopixelTick();
-  buzzerTick();
-
-  if (millis() - lastSwitchMs >= SWITCH_INTERVAL_MS) {
-    lastSwitchMs = millis();
-    stateIndex = (stateIndex + 1) % 6;
-    switch (stateIndex) {
-      case 0:
-        neopixelSetState(VisualState::Standing);
-        buzzerSetState(BuzzerState::Silent);
-        Serial.println("Standing (blue, silent)");
-        break;
-      case 1:
-        neopixelSetState(VisualState::Sitting);
-        buzzerSetState(BuzzerState::Silent);
-        Serial.println("Sitting (cyan, silent)");
-        break;
-      case 2:
-        neopixelSetState(VisualState::Walking);
-        buzzerSetState(BuzzerState::Silent);
-        Serial.println("Walking (green, silent)");
-        break;
-      case 3:
-        neopixelSetState(VisualState::Dizzy);
-        buzzerSetState(BuzzerState::Warning);
-        Serial.println("Dizzy (amber, slow intermittent beep)");
-        break;
-      case 4:
-        neopixelSetState(VisualState::Alarmed);
-        buzzerSetState(BuzzerState::Siren);
-        Serial.println("Alarmed (red pulsing, fast beeping)");
-        break;
-      case 5:
-        neopixelSetState(VisualState::Recovering);
-        buzzerSetState(BuzzerState::Recovery);
-        Serial.println("Recovering (amber->green fade, triple chirp)");
-        break;
-    }
+  // Tick the animations every ~20ms during window collection (not just
+  // once per full window) so the Alarmed pulse / buzzer patterns stay
+  // smooth, even though classification itself only happens once per
+  // window below.
+  for (int i = 0; i < MODEL_WINDOW_SIZE; i++) {
+    mpu6050ReadSample(&window[i * MODEL_SENSOR_CHANNELS]);
+    neopixelTick();
+    buzzerTick();
+    delay(20);  // ~50Hz, matches training data rate
   }
+
+  int predicted = modelPredict(window);
+  stateMachineUpdate(predicted);
 }

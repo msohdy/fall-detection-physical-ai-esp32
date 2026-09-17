@@ -82,9 +82,10 @@ Each task below is a checkbox. As you close a task, capture what you'd tell some
 
 **Setup**
 
-- [ ] Create a free [Edge Impulse](https://edgeimpulse.com/) account and a new project
-- [ ] Flash a minimal sketch to the ESP32-S3 that reads MPU6050 accel + gyro and prints to serial in the format Edge Impulse's Data Forwarder expects
-- [ ] Connect the Data Forwarder (`edge-impulse-data-forwarder` CLI, installed via `npm install -g edge-impulse-cli`) and confirm live samples appear in the Edge Impulse Data Acquisition tab
+- [x] Create a free [Edge Impulse](https://edgeimpulse.com/) account and a new project
+- [x] Flash a minimal sketch to the ESP32-S3 that reads MPU6050 accel + gyro and prints to serial in the format Edge Impulse's Data Forwarder expects — streams `accX,accY,accZ,gyrX,gyrY,gyrZ` at ~100Hz via raw I2C register reads (no Adafruit_MPU6050 library — an earlier attempt using that library appeared to hang/produce no serial output, and raw register access matching a previously-known-working sketch was used instead). Confirmed producing real, varying sensor values.
+  - **Debugging note:** hit a confusing failure where I2C reads returned a fixed garbage value (`Wire.read()` returning -1 for every byte, i.e. `Wire.requestFrom()` failing) despite the MPU6050 previously scanning fine at `0x68`. Root cause turned out to be the **ESP32-S3 board itself not being fully seated in the breadboard** — some pins (including GPIO8/9) had no reliable contact. A lit power LED on the MPU6050 was a red herring: it stayed faintly lit even with VCC disconnected, due to current backfeeding through the I2C pull-up resistors on the breakout — lesson for later debugging: a lit sensor LED doesn't guarantee a solid power connection.
+- [ ] Connect the Data Forwarder and confirm live samples appear in the Edge Impulse Data Acquisition tab — **deviation:** `npm install -g edge-impulse-cli` failed (one of its dependencies, `@serialport/bindings`, needs native compilation via `node-gyp`, which requires Visual Studio Build Tools that aren't installed — a large, slow install to add just for this). Using Edge Impulse Studio's browser-based **WebSerial** "Connect a new device" flow instead (Chrome/Edge only) — same underlying Data Forwarder protocol, no CLI/native build needed.
 
 **Per-class collection** (5 classes: standing, sitting, walking, dizzy, fall)
 

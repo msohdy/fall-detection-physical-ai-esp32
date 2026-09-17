@@ -1,36 +1,59 @@
 #include <Arduino.h>
-#include <Adafruit_NeoPixel.h>
+#include <Wire.h>
 
-// Onboard Neopixel bring-up test: cycles red/green/blue.
-// Confirms GPIO48 drives the onboard RGB LED before adding more
-// components. Not the final firmware -- see Phase 5.
+// Edge Impulse Data Forwarder sketch (Phase 4): streams MPU6050
+// accel + gyro as comma-separated values over serial, one line per
+// sample. Raw register access -- based on a known-working sketch
+// from an earlier project. Not the final firmware -- see Phase 5.
 
-#define LED_PIN 48
-#define LED_COUNT 1
-
-Adafruit_NeoPixel pixel(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
+#define SDA_PIN 8
+#define SCL_PIN 9
+#define MPU_ADDR 0x68
+#define ACCEL_SCALE 16384.0
+#define GYRO_SCALE 131.0
+#define GRAVITY 9.80665
 
 void setup() {
   Serial.begin(115200);
   delay(1000);
-  pixel.begin();
-  pixel.setBrightness(50);
-  Serial.println("Neopixel test starting...");
+  Wire.begin(SDA_PIN, SCL_PIN);
+
+  // Wake MPU (clear sleep bit in power management register)
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x6B);
+  Wire.write(0);
+  Wire.endTransmission(true);
+
+  Serial.println("accX,accY,accZ,gyrX,gyrY,gyrZ");
 }
 
 void loop() {
-  Serial.println("RED");
-  pixel.setPixelColor(0, pixel.Color(255, 0, 0));
-  pixel.show();
-  delay(1000);
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x3B);  // starting register: accel X high byte
+  Wire.endTransmission(false);
+  Wire.requestFrom(MPU_ADDR, 14);  // accel (6) + temp (2) + gyro (6)
 
-  Serial.println("GREEN");
-  pixel.setPixelColor(0, pixel.Color(0, 255, 0));
-  pixel.show();
-  delay(1000);
+  int16_t rawAx = (Wire.read() << 8) | Wire.read();
+  int16_t rawAy = (Wire.read() << 8) | Wire.read();
+  int16_t rawAz = (Wire.read() << 8) | Wire.read();
+  Wire.read(); Wire.read();  // discard temperature
+  int16_t rawGx = (Wire.read() << 8) | Wire.read();
+  int16_t rawGy = (Wire.read() << 8) | Wire.read();
+  int16_t rawGz = (Wire.read() << 8) | Wire.read();
 
-  Serial.println("BLUE");
-  pixel.setPixelColor(0, pixel.Color(0, 0, 255));
-  pixel.show();
-  delay(1000);
+  float ax = (rawAx / ACCEL_SCALE) * GRAVITY;
+  float ay = (rawAy / ACCEL_SCALE) * GRAVITY;
+  float az = (rawAz / ACCEL_SCALE) * GRAVITY;
+  float gx = rawGx / GYRO_SCALE;
+  float gy = rawGy / GYRO_SCALE;
+  float gz = rawGz / GYRO_SCALE;
+
+  Serial.print(ax, 3); Serial.print(",");
+  Serial.print(ay, 3); Serial.print(",");
+  Serial.print(az, 3); Serial.print(",");
+  Serial.print(gx, 3); Serial.print(",");
+  Serial.print(gy, 3); Serial.print(",");
+  Serial.println(gz, 3);
+
+  delay(10);  // ~100 Hz
 }

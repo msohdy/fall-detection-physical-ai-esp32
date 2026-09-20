@@ -1,5 +1,7 @@
 # Fall Detection & Alert System
 
+![Fall Detection & Alert System poster](docs/Poster.png)
+
 An ESP32-S3 wearable/room device that classifies body state (standing, sitting, walking, dizzy, fall) from MPU6050 motion data using an on-device TinyML model, gives silent per-state Neopixel feedback, sounds a buzzer for concerning states, and sends a Telegram alert to an emergency contact when a fall is confirmed.
 
 **Status:** Phase 6 complete — Phase 7: Testing & Validation in progress. (Phase 6 closed with one small item carried forward: a clean final untethered/battery confirmation run, folded into Phase 7's checklist.)

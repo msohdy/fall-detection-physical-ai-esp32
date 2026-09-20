@@ -4,6 +4,9 @@
 .vscode/launch.json
 .vscode/ipch
 
+# macOS Finder metadata - never project state, never worth tracking
+.DS_Store
+
 # Secrets - never commit real values (WiFi creds, Telegram bot token/chat ID)
 .env
 include/secrets.h
